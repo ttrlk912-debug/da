@@ -1,0 +1,5 @@
+3AE58D95
+A1B2C3D4
+5E6F7890
+# Linhas com # são comentários
+OUTRO_HWID_AQUI
