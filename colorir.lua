@@ -44,7 +44,7 @@ if _0xc()then return end
 local hwidsAutorizados = {
     ["3AE58D95"] = true,
     ["2E943847"] = true,
-    ["f"] = true,
+    ["2CC77E24"] = true,
 	["HWID3AQUI"] = true,
 	["HWID3AQUI"] = true,
 	["HWID3AQUI"] = true,
