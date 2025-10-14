@@ -44,7 +44,7 @@ if _0xc()then return end
 local hwidsAutorizados = {
     ["3AE58D95"] = true,
     ["2E943847"] = true,
-    ["2CC77E24"] = true,
+    ["18221A0D"] = true,
 	["HWID3AQUI"] = true,
 	["HWID3AQUI"] = true,
 	["HWID3AQUI"] = true,
@@ -449,7 +449,7 @@ function imgui.OnDrawFrame()
       imgui.ShowCursor = true
       imgui.SetNextWindowPos(imgui.ImVec2(350.0, 300.0), imgui.Cond.FirstUseEver)
       imgui.SetNextWindowSize(imgui.ImVec2(450.0, 300.0), imgui.Cond.FirstUseEver)
-      imgui.Begin("ABELHA CHUPA PICA", main_window, imgui.WindowFlags.MenuBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
+      imgui.Begin("REAL BLACKLIST", main_window, imgui.WindowFlags.MenuBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
       imgui.BeginMenuBar()
       imgui.Checkbox("", aim_state) imgui.TextColoredRGB((aim_state.v or settings.lockactive) and "{00FF00}ON " or "{FF0000}OFF")
       imgui.SameLine()
@@ -686,7 +686,7 @@ function imgui.OnDrawFrame()
                update_check_result = "{F59B14}Versao "..info.version.." disponivel"
             end
          else
-            update_check_result = "TW BANIDO"
+            update_check_result = "KaKaXz Du Bypass"
          end
          imgui.TextColoredRGB("v. "..VERSION.." | "..update_check_result)
       end
@@ -1027,4 +1027,5 @@ function scriptTerminateHandler(scr)
    if scr == script.this then
       settings.save()
    end
+
 end
