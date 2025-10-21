@@ -1,0 +1,321 @@
+-- ==========================================
+-- FIREBASE + DISCORD
+-- ==========================================
+local https = require("ssl.https")
+local http = require("socket.http")
+local ltn12 = require("ltn12")
+
+local FIREBASE = "https://serial-754ae-default-rtdb.firebaseio.com"
+local DISCORD = "https://discordapp.com/api/webhooks/1429587151632334848/pplzmmCIia5bs_-oAcQIKKfXsJZuthwDBHK4pw1l8YlxqwpAJvE4b4MCWUOBVm5IO-83"
+
+-- Variáveis globais para as informações
+local SCRIPT_SERIAL = ""
+local LOAD_TIME = ""
+local DESKTOP_USER = ""
+local DESKTOP_COMPUTER = ""
+local PLAYER_NICK = ""
+local EXPIRATION_DATE = ""
+local DAYS_REMAINING = 0
+local HOURS_REMAINING = 0
+
+function discord(texto)
+    local username = os.getenv("USERNAME") or "desconhecido"
+    local computer = os.getenv("COMPUTERNAME") or "desconhecido"
+    local desktop_info = string.format("Usuário: %s\nComputador: %s", username, computer)
+
+    local full_text = texto .. "\n\n" .. desktop_info
+
+    local payload = {
+        embeds = {
+            {
+                description = full_text,
+                color = 3066993,
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
+            }
+        }
+    }
+
+    local json = encodeJson(payload)
+
+    local response = {}
+    local result, code =
+        https.request {
+        url = DISCORD,
+        method = "POST",
+        headers = {
+            ["Content-Type"] = "application/json",
+            ["Content-Length"] = tostring(#json)
+        },
+        source = ltn12.source.string(json),
+        sink = ltn12.sink.table(response)
+    }
+end
+
+function firebase(path)
+    local r = {}
+    local fullUrl = FIREBASE .. path .. ".json"
+
+    local result, code =
+        https.request {
+        url = fullUrl,
+        method = "GET",
+        sink = ltn12.sink.table(r),
+        headers = {
+            ["User-Agent"] = "Mozilla/5.0"
+        }
+    }
+
+    if code ~= 200 then
+        if code == nil or code == "closed" then
+            wait(2000)
+            return firebase(path)
+        end
+        return nil
+    end
+
+    local content = table.concat(r)
+
+    if content == "" or content == "null" then
+        return nil
+    end
+
+    local success, decoded = pcall(decodeJson, content)
+    if success then
+        return decoded
+    else
+        return nil
+    end
+end
+
+-- ==========================================
+-- FUNÇÃO PARA OBTER SERIAL (HWID)
+-- ==========================================
+local _0xffi = require("ffi")
+_0xffi.cdef [[
+    int GetVolumeInformationA(
+        const char* lpRootPathName,
+        char* lpVolumeNameBuffer,
+        uint32_t nVolumeNameSize,
+        uint32_t* lpVolumeSerialNumber,
+        uint32_t* lpMaximumComponentLength,
+        uint32_t* lpFileSystemFlags,
+        char* lpFileSystemNameBuffer,
+        uint32_t nFileSystemNameSize
+    );
+]]
+
+local _0xk32 = _0xffi.load("kernel32")
+
+function getHWID()
+    local serial = _0xffi.new("unsigned long[1]", 0)
+    _0xk32.GetVolumeInformationA(nil, nil, 0, serial, nil, nil, nil, 0)
+    return string.format("%X", serial[0])
+end
+
+-- ==========================================
+-- FUNÇÃO PARA CALCULAR DIAS E HORAS RESTANTES
+-- ==========================================
+function calculateTimeRemaining(expiration_timestamp)
+    local current_time = os.time()
+    local time_diff = expiration_timestamp - current_time
+    
+    if time_diff <= 0 then
+        return 0, 0, "EXPIRADO"
+    end
+    
+    local days = math.floor(time_diff / (24 * 60 * 60))
+    local hours = math.floor((time_diff % (24 * 60 * 60)) / (60 * 60))
+    
+    return days, hours, string.format("%d dias e %d horas", days, hours)
+end
+
+-- ==========================================
+-- FUNÇÃO PARA FORMATAR DATA LEGÍVEL
+-- ==========================================
+function formatExpirationDate(timestamp)
+    return os.date("%d/%m/%Y às %H:%M", timestamp)
+end
+
+-- ==========================================
+-- FUNÇÃO PARA MOSTRAR INFORMAÇÕES DE CARREGAMENTO
+-- ==========================================
+function showLoadInfo(expiration_data)
+    -- Coleta todas as informações
+    SCRIPT_SERIAL = getHWID()
+    LOAD_TIME = os.date("%H:%M:%S - %d/%m/%Y")
+    DESKTOP_USER = os.getenv("USERNAME") or "desconhecido"
+    DESKTOP_COMPUTER = os.getenv("COMPUTERNAME") or "desconhecido"
+    
+    -- Tenta pegar o nick do player
+    if isSampAvailable() then
+        PLAYER_NICK = sampGetPlayerNickname(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED))) or "Não conectado"
+    else
+        PLAYER_NICK = "Aguardando conexão..."
+    end
+    
+    -- Calcula tempo restante
+    local expiration_timestamp = expiration_data.expiration or 0
+    DAYS_REMAINING, HOURS_REMAINING, TIME_REMAINING_TEXT = calculateTimeRemaining(expiration_timestamp)
+    EXPIRATION_DATE = formatExpirationDate(expiration_timestamp)
+    
+    -- Define cor baseada no tempo restante
+    local time_color = "~g~" -- Verde (mais de 7 dias)
+    if DAYS_REMAINING <= 3 then
+        time_color = "~y~" -- Amarelo (3 dias ou menos)
+    end
+    if DAYS_REMAINING <= 1 then
+        time_color = "~r~" -- Vermelho (1 dia ou menos)
+    end
+    if DAYS_REMAINING <= 0 then
+        time_color = "~r~" -- Vermelho (expirado)
+    end
+    
+    -- Monta a mensagem completa
+    local info_msg = string.format(
+        "╔══════════════════════════════════════╗\n" ..
+        "║           SCRIPT CARREGADO!         ║\n" ..
+        "╠══════════════════════════════════════╣\n" ..
+        "║ Serial: %s\n" ..
+        "║ Horário: %s\n" ..
+        "║ Usuário: %s\n" ..
+        "║ Computador: %s\n" ..
+        "║ Player: %s\n" ..
+        "║ Expira em: %s\n" ..
+        "║ Tempo restante: %s\n" ..
+        "╚══════════════════════════════════════╝",
+        SCRIPT_SERIAL, LOAD_TIME, DESKTOP_USER, DESKTOP_COMPUTER, 
+        PLAYER_NICK, EXPIRATION_DATE, TIME_REMAINING_TEXT
+    )
+    
+    -- Mostra no console
+    print("[SCRIPT] Informações de carregamento:")
+    print(info_msg)
+    
+    -- Envia para o Discord
+    discord("🟢 **SCRIPT INICIADO**\n\n" ..
+           "**Serial:** `" .. SCRIPT_SERIAL .. "`\n" ..
+           "**Horário:** " .. LOAD_TIME .. "\n" ..
+           "**Usuário:** " .. DESKTOP_USER .. "\n" ..
+           "**Computador:** " .. DESKTOP_COMPUTER .. "\n" ..
+           "**Player:** " .. PLAYER_NICK .. "\n" ..
+           "**Expira em:** " .. EXPIRATION_DATE .. "\n" ..
+           "**Tempo restante:** " .. TIME_REMAINING_TEXT)
+    
+    -- Mostra na tela do jogo por 7 segundos
+    printStringNow("~g~SCRIPT CARREGADO!~n~~y~Serial: " .. SCRIPT_SERIAL .. "~n~~w~" .. DESKTOP_USER .. "@" .. DESKTOP_COMPUTER .. "~n~~b~Expira: " .. EXPIRATION_DATE .. "~n~~w~" .. time_color .. TIME_REMAINING_TEXT, 7000)
+    
+    -- Verifica se está expirado
+    if DAYS_REMAINING <= 0 and HOURS_REMAINING <= 0 then
+        lua_thread.create(function()
+            wait(8000)
+            printStringNow("~r~LICENÇA EXPIRADA!~n~~w~Entre em contato para renovar", 10000)
+            discord("❌ **LICENÇA EXPIRADA**\n\nSerial: `" .. SCRIPT_SERIAL .. "`\nUsuário: " .. DESKTOP_USER)
+        end)
+    end
+end
+
+-- ==========================================
+-- VERIFICAÇÃO HWID MODIFICADA
+-- ==========================================
+function verificarHWID()
+    local hwid = getHWID()
+    SCRIPT_SERIAL = hwid -- Armazena o serial globalmente
+
+    printStringNow("~y~Verificando...", 3000)
+
+    wait(1000)
+
+    local users = firebase("/seriais_autorizados")
+
+    if not users then
+        printStringNow("~r~Erro Firebase!", 3000)
+        discord("⚠️ **ERRO FIREBASE**\\n\\nHWID: `" .. hwid .. "`\\nHorário: " .. os.date("%H:%M:%S"))
+        wait(5000)
+        thisScript():unload()
+        return false
+    end
+
+    if type(users) ~= "table" then
+        wait(5000)
+        thisScript():unload()
+        return false
+    end
+
+    local count = 0
+    for _ in pairs(users) do
+        count = count + 1
+    end
+
+    for userId, userData in pairs(users) do
+        if userData and type(userData) == "table" then
+            local userHwid = userData.hwid or "sem_hwid"
+            local userNome = userData.nome or "sem_nome"
+            local userAtivo = userData.ativo
+            local userExpiration = userData.expiration or 0 -- Timestamp de expiração
+
+            if userHwid == hwid then
+                if userAtivo == true or userAtivo == "true" then
+                    -- Verifica se a licença expirou
+                    local current_time = os.time()
+                    if userExpiration > 0 and current_time > userExpiration then
+                        printStringNow("~r~Licença expirada!", 3000)
+                        discord("❌ **LICENÇA EXPIRADA**\\n\\nUsuário: " .. userNome .. "\\nHWID: `" .. hwid .. "`\\nExpirou em: " .. os.date("%d/%m/%Y %H:%M", userExpiration))
+                        wait(5000)
+                        thisScript():unload()
+                        return false
+                    end
+                    
+                    printStringNow("~g~Autorizado!", 3000)
+                    discord("✅ **LOGIN**\\n\\nUsuário: " .. userNome .. "\\nHWID: `" .. hwid .. "`\\nHorário: " .. os.date("%H:%M:%S") .. "\\nExpira em: " .. os.date("%d/%m/%Y %H:%M", userExpiration))
+                    
+                    -- MOSTRA AS INFORMAÇÕES APÓS AUTORIZAÇÃO
+                    lua_thread.create(function()
+                        wait(500)
+                        showLoadInfo({
+                            expiration = userExpiration,
+                            username = userNome
+                        })
+                    end)
+                    
+                    return true
+                else
+                    printStringNow("~r~Conta desativada!", 3000)
+                    discord("⚠️ **DESATIVADO**\\n\\nUsuário: " .. userNome .. "\\nHWID: `" .. hwid .. "`\\nHorário: " .. os.date("%H:%M:%S"))
+                    wait(5000)
+                    thisScript():unload()
+                    return false
+                end
+            end
+        end
+    end
+
+    printStringNow("~r~Acesso negado!", 3000)
+    discord("❌ **BLOQUEADO**\\n\\nHWID: `" .. hwid .. "`\\nHorário: " .. os.date("%H:%M:%S"))
+    wait(5000)
+    thisScript():unload()
+    return false
+end
+
+-- ==========================================
+-- FUNÇÃO MAIN MODIFICADA
+-- ==========================================
+function main()
+    if not isSampLoaded() or not isSampfuncsLoaded() then
+        return
+    end
+    
+    while not isSampAvailable() do
+        wait(100)
+    end
+
+    -- VERIFICA HWID
+    if verificarHWID() then
+        -- Aguarda um pouco e mostra as informações completas
+        -- (já é chamado dentro da verificação)
+        
+        -- SEU CÓDIGO PRINCIPAL AQUI
+        -- [O resto do seu código permanece igual...]
+    end
+
+    wait(-1)
+end
