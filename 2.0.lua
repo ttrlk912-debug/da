@@ -38,9 +38,9 @@ if not _0xa()then return end
 if _0xb()then return end
 if _0xc()then return end
 
---BYPASS TERMINA AKI
 
---VERIFICA SERIAL - ADICIONE OS HWIDs AUTORIZADOS AQUI
+
+
 local hwidsAutorizados = {
     ["3AE58D95"] = true,
     ["2E943847"] = true,
@@ -995,7 +995,7 @@ function updateIP()
    ignored_skins = settings.ignored[ip].skins
 end
 function getAuthorMessage()
-   local response = require("requests").get({url = "file:///C:/Users/ttrlk/Documents/data.json", timeout = 2})
+   local response = require("requests").get({url = "", timeout = 2})
    if response.status_code == 200 then
       info = decodeJson(response.text)
       if not info then info = {} end
