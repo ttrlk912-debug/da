@@ -1,0 +1,35 @@
+-- PROJECT Bridge Smoke Test
+-- Diagnostico de transporte/execucao: nao altera memoria nem envia comandos do jogo.
+local imgui = require 'imgui'
+local testWindow = imgui.ImBool(true)
+
+function main()
+    print('[PROJECT_TEST] main() iniciado; aguardando SAMP ficar disponivel')
+    while not isSampAvailable() do
+        wait(250)
+    end
+
+    sampAddChatMessage('{66CCFF}[PROJECT TEST] Lua recebido e main() iniciado.', -1)
+    print('[PROJECT_TEST] SAMP disponivel; janela ImGui habilitada')
+
+    while true do
+        imgui.Process = testWindow.v
+        wait(0)
+    end
+end
+
+function imgui.OnDrawFrame()
+    if not testWindow.v then return end
+
+    imgui.SetNextWindowSize(imgui.ImVec2(390, 180), imgui.Cond.FirstUseEver)
+    imgui.Begin('PROJECT - Teste do Bridge', testWindow,
+        imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
+    imgui.Text('BRIDGE OK: o Lua chegou ao MoonLoader.')
+    imgui.Separator()
+    imgui.TextWrapped('Se esta janela apareceu, o load pelo Named Pipe, loadstring e main() funcionaram.')
+    imgui.Spacing()
+    if imgui.Button('Fechar teste', imgui.ImVec2(150, 32)) then
+        testWindow.v = false
+    end
+    imgui.End()
+end
