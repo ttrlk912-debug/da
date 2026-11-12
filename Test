@@ -1,35 +1,1098 @@
--- PROJECT Bridge Smoke Test
--- Diagnostico de transporte/execucao: nao altera memoria nem envia comandos do jogo.
+script_name('Hitmarker')
+script_author('Codex')
+script_description('Mostra uma imagem e toca um som quando o DamageInformer detecta um acerto.')
+script_version('1.7.0')
+
+require 'lib.moonloader'
+local sampev = require 'lib.samp.events'
+local inicfg = require 'inicfg'
 local imgui = require 'imgui'
-local testWindow = imgui.ImBool(true)
+local vkeys = require 'vkeys'
+local wm = require 'windows.message'
+local lfs = require 'lfs'
 
-function main()
-    print('[PROJECT_TEST] main() iniciado; aguardando SAMP ficar disponivel')
-    while not isSampAvailable() do
-        wait(250)
-    end
+-- ==============================
+-- CONFIGURAÇÃO FIXA
+-- ==============================
 
-    sampAddChatMessage('{66CCFF}[PROJECT TEST] Lua recebido e main() iniciado.', -1)
-    print('[PROJECT_TEST] SAMP disponivel; janela ImGui habilitada')
+-- Esses valores só são usados na PRIMEIRA vez que o script roda (para criar o .ini).
+-- Depois disso, os caminhos ficam salvos em Hitmarker.ini e podem ser trocados
+-- direto pelo menu do jogo (/hit), sem precisar editar o script.
+local DEFAULT_IMAGE_PATH = 'C:\\Users\\mn_alves\\Downloads\\GTA ANT FPS\\modloader\\twdoban.png'
+local DEFAULT_SOUND_PATH = 'C:\\Users\\mn_alves\\Downloads\\GTA ANT FPS\\moonloader\\gamefixer\\GENRL\\Deagle6.wav'
 
-    while true do
-        imgui.Process = testWindow.v
-        wait(0)
+-- Pasta de imagens: sua própria, criada automaticamente na primeira vez que
+-- o script roda. Pasta de sons: a MESMA que o GameFixer (Ultimate Genrl) já
+-- usa (moonloader/gamefixer/genrl/), pra reaproveitar os sons que você já tem
+-- (Deagle, Bell, Pain, etc.) em vez de duplicar arquivo. O menu (/hit) lista
+-- tudo que estiver nessas pastas e você escolhe clicando, sem digitar caminho.
+local IMAGES_DIR = 'moonloader\\hitmarker\\images\\'
+local SOUNDS_DIR = 'moonloader/gamefixer/genrl/'
+
+local function ensureDir(path)
+    if not doesDirectoryExist(path) then
+        createDirectory(path)
     end
 end
 
-function imgui.OnDrawFrame()
-    if not testWindow.v then return end
+-- Lista os arquivos de uma pasta cujo nome bate com o padrão (ex: '%.png$').
+-- Igual ao getListOfSounds() do GameFixer: chama lfs.dir direto, sem checar
+-- doesDirectoryExist antes (esse checador às vezes não bate com o caminho
+-- relativo do jeito que o lfs reconhece, e a lista ficava sempre vazia).
+local function listFiles(dir, extPattern)
+    local files = {}
+    pcall(function()
+        for file in lfs.dir(dir) do
+            if file ~= '.' and file ~= '..' and file:lower():match(extPattern) then
+                table.insert(files, file)
+            end
+        end
+    end)
+    table.sort(files)
+    return files
+end
 
-    imgui.SetNextWindowSize(imgui.ImVec2(390, 180), imgui.Cond.FirstUseEver)
-    imgui.Begin('PROJECT - Teste do Bridge', testWindow,
-        imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
-    imgui.Text('BRIDGE OK: o Lua chegou ao MoonLoader.')
-    imgui.Separator()
-    imgui.TextWrapped('Se esta janela apareceu, o load pelo Named Pipe, loadstring e main() funcionaram.')
-    imgui.Spacing()
-    if imgui.Button('Fechar teste', imgui.ImVec2(150, 32)) then
-        testWindow.v = false
+-- Padrão do texto que identifica um acerto SEU no chat (dano causado, não recebido).
+--
+-- Confirmado com o log real do seu servidor:
+--   Você acerta:  "-DamageInformer- Você fez 1 de dano em ID 234068 com Soco..."
+--   Você leva:    "-DamageInformer- ID 234068 fez 1 de dano com Soco..."
+--
+-- Em vez de procurar a palavra "Você" (acento pode vir com encoding diferente
+-- no SA:MP e quebrar a comparação), a gente identifica pelo formato: se logo
+-- depois de "DamageInformer- " vem "ID <número> fez", é dano QUE VOCÊ LEVOU
+-- -> ignora. Qualquer outra mensagem com "DamageInformer" + "fez" é dano que
+-- você causou -> dispara o hitmarker. Isso funciona independente de acento.
+local HIT_RECEIVED_PATTERN = 'DamageInformer%-%s*ID %d+ fez'
+
+-- Ative para ver no chat o texto bruto de cada mensagem recebida (debug).
+-- Útil se o padrão acima não bater com o formato do SEU servidor: ligue isso,
+-- tome um dano e um acerto, e compare o texto exato que aparece no chat.
+local DEBUG_LOG_MESSAGES = false
+
+-- Comando para abrir o menu de configuração
+local MENU_COMMAND = 'hit'
+
+-- ==============================
+-- CONFIGURAÇÃO SALVA (INI)
+-- ==============================
+local iniPath = 'Hitmarker.ini'
+local ini = inicfg.load({
+    MARKER = {
+        X = 0,          -- deslocamento em relação ao centro da tela
+        Y = 0,
+        SIZE = 48,
+        DURATION = 250, -- ms
+        TESTKEY = vkeys.VK_F6, -- tecla usada para testar manualmente
+        TEST_ENABLED = false,  -- se a tecla de teste está ativa
+        SOUND_ENABLED = true,  -- se o som de acerto está ativo
+        SOUND_VOLUME = 100,    -- volume (0-100)
+        IMAGE_PATH = DEFAULT_IMAGE_PATH,
+        SOUND_PATH = DEFAULT_SOUND_PATH,
+        PAIN_SOUND_ENABLED = false, -- se o som de "levei tiro" está ativo
+        PAIN_SOUND_VOLUME = 100,
+        PAIN_SOUND_PATH = '',       -- escolhido pelo menu, na pasta de sons
+        MUSIC_ENABLED = false, -- musica de fundo em loop
+        MUSIC_VOLUME = 50,
+        MUSIC_PATH = '',
+        -- fixed = sempre a mesma imagem | random = aleatoria | cycle = em sequencia
+        IMAGE_MODE = 'fixed',
+    }
+}, iniPath)
+
+-- Garante valores padrão para campos novos, mesmo se o .ini já existia
+-- de uma versão anterior do script (sem esses campos).
+if ini.MARKER.TEST_ENABLED == nil then ini.MARKER.TEST_ENABLED = false end
+if ini.MARKER.SOUND_ENABLED == nil then ini.MARKER.SOUND_ENABLED = true end
+if ini.MARKER.SOUND_VOLUME == nil then ini.MARKER.SOUND_VOLUME = 100 end
+if ini.MARKER.IMAGE_PATH == nil or ini.MARKER.IMAGE_PATH == '' then ini.MARKER.IMAGE_PATH = DEFAULT_IMAGE_PATH end
+if ini.MARKER.SOUND_PATH == nil or ini.MARKER.SOUND_PATH == '' then ini.MARKER.SOUND_PATH = DEFAULT_SOUND_PATH end
+if ini.MARKER.PAIN_SOUND_ENABLED == nil then ini.MARKER.PAIN_SOUND_ENABLED = false end
+if ini.MARKER.PAIN_SOUND_VOLUME == nil then ini.MARKER.PAIN_SOUND_VOLUME = 100 end
+if ini.MARKER.PAIN_SOUND_PATH == nil then ini.MARKER.PAIN_SOUND_PATH = '' end
+if ini.MARKER.MUSIC_ENABLED == nil then ini.MARKER.MUSIC_ENABLED = false end
+if ini.MARKER.MUSIC_VOLUME == nil then ini.MARKER.MUSIC_VOLUME = 50 end
+if ini.MARKER.MUSIC_PATH == nil then ini.MARKER.MUSIC_PATH = '' end
+if ini.MARKER.IMAGE_MODE == nil or ini.MARKER.IMAGE_MODE == '' then ini.MARKER.IMAGE_MODE = 'fixed' end
+
+inicfg.save(ini, iniPath)
+
+local function saveConfig()
+    inicfg.save(ini, iniPath)
+end
+
+-- ==============================
+-- ESTADO INTERNO
+-- ==============================
+local texture = nil
+local showUntil = 0
+local sw, sh = getScreenResolution()
+
+-- Pool de texturas para modo random/cycle (filename -> texture handle)
+local image_textures = {}  -- [filename] = texture
+local image_order = {}     -- lista ordenada de filenames carregados
+local cycle_index = 1      -- indice atual no modo cycle
+
+local menu_open = imgui.ImBool(false)
+local test_enabled = imgui.ImBool(ini.MARKER.TEST_ENABLED)
+local sound_enabled = imgui.ImBool(ini.MARKER.SOUND_ENABLED)
+local pain_sound_enabled = imgui.ImBool(ini.MARKER.PAIN_SOUND_ENABLED)
+local music_enabled = imgui.ImBool(ini.MARKER.MUSIC_ENABLED)
+local current_tab = 1 -- 1 = Visual, 2 = Sons, 3 = Musica, 4 = Avancado
+
+-- Listas de arquivos encontrados em IMAGES_DIR / SOUNDS_DIR (preenchidas em main())
+local image_files = {}
+local sound_files = {}
+local last_load_status = nil -- mensagem de status mostrada no menu após escolher um arquivo
+
+local function refreshFileLists()
+    image_files = listFiles(IMAGES_DIR, '%.png$')
+    sound_files = listFiles(SOUNDS_DIR, '%.wav$') -- moonloader só toca .wav/.mp3 nativamente sem libs extras
+    for _, f in ipairs(listFiles(SOUNDS_DIR, '%.mp3$')) do
+        table.insert(sound_files, f)
     end
-    imgui.End()
+    table.sort(sound_files)
+end
+
+-- Estado de captura de tecla (quando o usuário clica em "Alterar" no menu)
+local binding = false
+
+local audio = nil
+local pain_audio = nil -- stream separado pro som de "levei tiro", pra não cortar o som de acerto
+local music_audio = nil -- stream da música de fundo (com loop manual)
+
+-- ==============================
+-- TOAST SYSTEM (notificações visuais)
+-- ==============================
+local toasts = {} -- { text, expire, ok }
+
+local function pushToast(text, ok)
+    table.insert(toasts, {
+        text = text,
+        expire = os.clock() + 3.0,
+        ok = ok
+    })
+    while #toasts > 4 do
+        table.remove(toasts, 1)
+    end
+    imgui.Process = true
+end
+
+-- ==============================
+-- CARREGAMENTO DE IMAGEM / SOM
+-- ==============================
+
+local function reloadImage()
+    local path = ini.MARKER.IMAGE_PATH
+    if not doesFileExist(path) then
+        texture = nil
+        return false, 'Imagem nao encontrada: ' .. path
+    end
+
+    local ok, result = pcall(renderLoadTextureFromFile, path)
+    if ok and result then
+        texture = result
+        collectgarbage()
+        return true, 'Imagem carregada com sucesso.'
+    else
+        texture = nil
+        return false, 'Falha ao carregar a imagem (verifique se e um PNG valido). Erro: ' .. tostring(result)
+    end
+end
+
+-- Pre-carrega todas as PNGs da pasta para uso em random/cycle
+local function preloadAllImages()
+    image_textures = {}
+    image_order = {}
+    cycle_index = 1
+
+    for _, filename in ipairs(image_files) do
+        local path = IMAGES_DIR .. filename
+        local ok, result = pcall(renderLoadTextureFromFile, path)
+        if ok and result then
+            image_textures[filename] = result
+            table.insert(image_order, filename)
+        end
+    end
+    collectgarbage()
+    return #image_order
+end
+
+-- Escolhe a textura do hit conforme IMAGE_MODE e aplica em `texture`
+local function pickHitImage()
+    local mode = ini.MARKER.IMAGE_MODE or 'fixed'
+
+    if mode == 'fixed' or #image_order == 0 then
+        -- modo fixo: mantém a textura atual (reloadImage já cuidou)
+        return
+    end
+
+    local chosen = nil
+
+    if mode == 'random' then
+        local idx = math.random(1, #image_order)
+        chosen = image_order[idx]
+    elseif mode == 'cycle' then
+        if cycle_index > #image_order then
+            cycle_index = 1
+        end
+        chosen = image_order[cycle_index]
+        cycle_index = cycle_index + 1
+        if cycle_index > #image_order then
+            cycle_index = 1
+        end
+    end
+
+    if chosen and image_textures[chosen] then
+        texture = image_textures[chosen]
+    end
+end
+
+local function playHitSound()
+    if not ini.MARKER.SOUND_ENABLED then
+        return
+    end
+
+    if audio then
+        pcall(setAudioStreamState, audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, audio) end
+        audio = nil
+        collectgarbage()
+    end
+
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.SOUND_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar o som de acerto', false)
+        return
+    end
+
+    audio = streamOrErr
+    setAudioStreamVolume(audio, ini.MARKER.SOUND_VOLUME / 100)
+    setAudioStreamState(audio, 1)
+end
+
+local function playPainSound()
+    if not ini.MARKER.PAIN_SOUND_ENABLED then
+        return
+    end
+    if not ini.MARKER.PAIN_SOUND_PATH or ini.MARKER.PAIN_SOUND_PATH == '' then
+        pushToast('Nenhum som de "levei tiro" escolhido', false)
+        return
+    end
+
+    if pain_audio then
+        pcall(setAudioStreamState, pain_audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, pain_audio) end
+        pain_audio = nil
+        collectgarbage()
+    end
+
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.PAIN_SOUND_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar o som de dano', false)
+        return
+    end
+
+    pain_audio = streamOrErr
+    setAudioStreamVolume(pain_audio, ini.MARKER.PAIN_SOUND_VOLUME / 100)
+    setAudioStreamState(pain_audio, 1)
+end
+
+-- ==============================
+-- MÚSICA DE FUNDO (loop)
+-- ==============================
+
+local function stopMusic()
+    if music_audio then
+        pcall(setAudioStreamState, music_audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, music_audio) end
+        music_audio = nil
+        collectgarbage()
+    end
+end
+
+local function playMusic()
+    stopMusic()
+    if not ini.MARKER.MUSIC_ENABLED then
+        return
+    end
+    if not ini.MARKER.MUSIC_PATH or ini.MARKER.MUSIC_PATH == '' then
+        pushToast('Nenhuma musica escolhida ainda', false)
+        return
+    end
+
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.MUSIC_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar a musica', false)
+        return
+    end
+
+    music_audio = streamOrErr
+    setAudioStreamVolume(music_audio, ini.MARKER.MUSIC_VOLUME / 100)
+    setAudioStreamState(music_audio, 1)
+end
+
+local function triggerHitmarker()
+    pickHitImage()
+    showUntil = os.clock() + (ini.MARKER.DURATION / 1000)
+    playHitSound()
+end
+
+function main()
+    repeat wait(100) until isSampAvailable()
+
+    ensureDir('moonloader\\hitmarker')
+    ensureDir(IMAGES_DIR)
+    ensureDir(SOUNDS_DIR)
+    refreshFileLists()
+
+    local ok, msg = reloadImage()
+    if ok then
+        pushToast('Imagem carregada com sucesso', true)
+    else
+        pushToast('Falha ao carregar imagem inicial', false)
+    end
+
+    local preloaded = preloadAllImages()
+    sampAddChatMessage('[Hitmarker] Coloque suas imagens (.png) em: ' .. getWorkingDirectory() .. '\\' .. IMAGES_DIR, 0xFF66CCFF)
+    sampAddChatMessage('[Hitmarker] Sons: usando a mesma pasta do GameFixer (' .. SOUNDS_DIR .. ')', 0xFF66CCFF)
+    sampAddChatMessage('[Hitmarker] Encontrei ' .. #sound_files .. ' som(ns) e ' .. #image_files .. ' imagem(ns) (' .. preloaded .. ' pre-carregadas).', 0xFF66CCFF)
+
+    if ini.MARKER.MUSIC_ENABLED then
+        playMusic()
+    end
+
+    sampRegisterChatCommand(MENU_COMMAND, function()
+        menu_open.v = not menu_open.v
+        imgui.Process = true
+    end)
+    sampAddChatMessage('[Hitmarker] Use /' .. MENU_COMMAND .. ' para configurar imagem, som, posicao, tamanho e duracao.', 0xFF66CCFF)
+
+    addEventHandler('onWindowMessage', function(msg, wparam, lparam)
+        if msg == wm.WM_KEYDOWN then
+            if binding then
+                if wparam ~= vkeys.VK_ESCAPE then
+                    ini.MARKER.TESTKEY = wparam
+                    saveConfig()
+                    pushToast('Tecla de teste atualizada', true)
+                end
+                binding = false
+                consumeWindowMessage()
+            end
+        end
+    end)
+
+    while true do
+        wait(0)
+        local typing = sampIsChatInputActive() or isSampfuncsConsoleActive() or sampIsDialogActive()
+        if ini.MARKER.TEST_ENABLED and not binding and not menu_open.v and not typing and isKeyJustPressed(ini.MARKER.TESTKEY) then
+            triggerHitmarker()
+        end
+
+        if ini.MARKER.MUSIC_ENABLED and music_audio and getAudioStreamState(music_audio) ~= 1 then
+            pcall(setAudioStreamPos, music_audio, 0)
+            setAudioStreamState(music_audio, 1)
+        end
+
+        local now = os.clock()
+        for i = #toasts, 1, -1 do
+            if toasts[i].expire < now then
+                table.remove(toasts, i)
+            end
+        end
+    end
+end
+
+
+function sampev.onServerMessage(color, text)
+    if DEBUG_LOG_MESSAGES then
+        sampAddChatMessage('[Hitmarker][DEBUG] ' .. text, 0xFFAAAAAA)
+    end
+
+    if not (text:find('DamageInformer') and text:find(' fez ')) then
+        return
+    end
+
+    if text:find(HIT_RECEIVED_PATTERN) then
+        playPainSound()
+    else
+        triggerHitmarker()
+    end
+end
+
+
+-- ============================================================
+-- PALETA DE CORES — tema profissional (preto + roxo)
+-- ============================================================
+local COL_BG_DARK       = imgui.ImVec4(0.07, 0.07, 0.09, 1.00)
+local COL_BG_PANEL      = imgui.ImVec4(0.10, 0.10, 0.13, 1.00)
+local COL_BG_CARD       = imgui.ImVec4(0.12, 0.12, 0.15, 1.00)
+local COL_BG_SIDEBAR    = imgui.ImVec4(0.08, 0.08, 0.10, 1.00)
+local COL_BG_HOVER      = imgui.ImVec4(0.16, 0.14, 0.20, 1.00)
+
+local COL_PURPLE        = imgui.ImVec4(0.55, 0.28, 0.90, 1.00)
+local COL_PURPLE_HOVER  = imgui.ImVec4(0.65, 0.38, 1.00, 1.00)
+local COL_PURPLE_ACTIVE = imgui.ImVec4(0.72, 0.48, 1.00, 1.00)
+local COL_PURPLE_DIM    = imgui.ImVec4(0.28, 0.14, 0.42, 1.00)
+local COL_PURPLE_SOFT   = imgui.ImVec4(0.40, 0.22, 0.62, 1.00)
+
+local COL_TEXT          = imgui.ImVec4(0.93, 0.93, 0.96, 1.00)
+local COL_TEXT_MUTED    = imgui.ImVec4(0.55, 0.55, 0.62, 1.00)
+local COL_TEXT_OK       = imgui.ImVec4(0.38, 0.88, 0.55, 1.00)
+local COL_TEXT_BAD      = imgui.ImVec4(0.95, 0.40, 0.40, 1.00)
+
+local COL_TOGGLE_ON     = imgui.ImVec4(0.22, 0.68, 0.40, 1.00)
+local COL_TOGGLE_ON_H   = imgui.ImVec4(0.30, 0.78, 0.48, 1.00)
+local COL_TOGGLE_OFF    = imgui.ImVec4(0.28, 0.28, 0.32, 1.00)
+local COL_TOGGLE_OFF_H  = imgui.ImVec4(0.40, 0.40, 0.45, 1.00)
+
+local COL_BTN           = imgui.ImVec4(0.18, 0.16, 0.24, 1.00)
+local COL_BTN_HOVER     = imgui.ImVec4(0.26, 0.22, 0.34, 1.00)
+local COL_BTN_ACTIVE    = imgui.ImVec4(0.34, 0.20, 0.48, 1.00)
+
+-- ============================================================
+-- HELPERS DE ANIMAÇÃO (leves, via os.clock)
+-- ============================================================
+local function pulse(speed, minA, maxA)
+    local t = os.clock() * (speed or 2.0)
+    local s = (math.sin(t) + 1.0) * 0.5
+    return minA + (maxA - minA) * s
+end
+
+local function lerpColor(a, b, t)
+    return imgui.ImVec4(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+        a.w + (b.w - a.w) * t
+    )
+end
+
+-- ============================================================
+-- WIDGETS CUSTOMIZADOS (compatíveis com ImGui antigo)
+-- ============================================================
+
+-- Botão da sidebar: integrado, texto centralizado, ativo = roxo
+local function sidebarButton(label, tabId, width, height)
+    local active = current_tab == tabId
+    local w = width or 140
+    local h = height or 40
+
+    if active then
+        local glow = pulse(2.2, 0.0, 0.18)
+        local col = imgui.ImVec4(
+            COL_PURPLE.x + glow * 0.3,
+            COL_PURPLE.y + glow * 0.2,
+            COL_PURPLE.z,
+            1.0
+        )
+        imgui.PushStyleColor(imgui.Col.Button, col)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+    else
+        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0, 0, 0, 0))
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BG_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_DIM)
+    end
+
+    -- centraliza o texto horizontalmente com espaços
+    local pad = math.floor((w - (#label * 7)) / 14)
+    if pad < 1 then pad = 1 end
+    local spaced = string.rep(" ", pad) .. label .. string.rep(" ", pad)
+
+    local clicked = imgui.Button(spaced .. "##sb" .. tabId, imgui.ImVec2(w, h))
+    imgui.PopStyleColor(3)
+
+    if clicked then
+        current_tab = tabId
+    end
+    return clicked
+end
+
+-- Toggle ON/OFF moderno
+local function toggleButton(label, value, id)
+    imgui.TextColored(COL_TEXT, label)
+    imgui.SameLine(imgui.GetWindowWidth() - 92)
+
+    local isOn = value.v
+    local txt = isOn and "  ON  " or " OFF "
+    local btnId = txt .. "##tgl" .. id
+
+    if isOn then
+        imgui.PushStyleColor(imgui.Col.Button, COL_TOGGLE_ON)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_TOGGLE_ON_H)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.18, 0.55, 0.32, 1.00))
+    else
+        imgui.PushStyleColor(imgui.Col.Button, COL_TOGGLE_OFF)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_TOGGLE_OFF_H)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.22, 0.22, 0.26, 1.00))
+    end
+
+    local clicked = imgui.Button(btnId, imgui.ImVec2(72, 26))
+    imgui.PopStyleColor(3)
+
+    if clicked then
+        value.v = not value.v
+        return true
+    end
+    return false
+end
+
+-- Botão primário (roxo)
+local function primaryButton(label, size)
+    local glow = pulse(1.8, 0.0, 0.12)
+    local col = imgui.ImVec4(
+        COL_PURPLE.x + glow,
+        COL_PURPLE.y + glow * 0.5,
+        COL_PURPLE.z,
+        1.0
+    )
+    imgui.PushStyleColor(imgui.Col.Button, col)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+    local clicked = imgui.Button(label, size or imgui.ImVec2(-1, 38))
+    imgui.PopStyleColor(3)
+    return clicked
+end
+
+-- Botão secundário (cinza com contraste)
+local function secondaryButton(label, size)
+    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+    local clicked = imgui.Button(label, size or imgui.ImVec2(-1, 34))
+    imgui.PopStyleColor(3)
+    return clicked
+end
+
+-- Buffers ImInt para edição direta dos números (criados sob demanda)
+local int_bufs = {}
+
+local function getIntBuf(id, value)
+    if not int_bufs[id] then
+        int_bufs[id] = imgui.ImInt(value)
+    end
+    return int_bufs[id]
+end
+
+-- Stepper de valor com campo editável (clica no número e digita)
+-- Layout:  [ - ]  [  45  ]  [ + ]
+local function valueStepper(label, value, id, minValue, maxValue, step)
+    imgui.TextColored(COL_TEXT_MUTED, label)
+    imgui.SameLine(200)
+
+    local buf = getIntBuf(id, value)
+
+    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+    imgui.PushStyleColor(imgui.Col.FrameBg, COL_BG_CARD)
+    imgui.PushStyleColor(imgui.Col.FrameBgHovered, COL_BG_HOVER)
+    imgui.PushStyleColor(imgui.Col.FrameBgActive, COL_PURPLE_DIM)
+
+    -- botão -
+    if imgui.Button(" - ##" .. id .. "d", imgui.ImVec2(32, 26)) then
+        value = math.max(minValue, value - step)
+        buf.v = value
+        saveConfig()
+        pushToast(label .. ': ' .. tostring(value), true)
+    end
+    imgui.SameLine()
+
+    -- campo editável: clica e digita (ex: -1, 20, 450)
+    imgui.PushItemWidth(72)
+    -- step/step_fast = 0 desativa as setinhas internas do InputInt
+    if imgui.InputInt("##" .. id .. "in", buf, 0, 0) then
+        local v = buf.v
+        if v < minValue then v = minValue end
+        if v > maxValue then v = maxValue end
+        buf.v = v
+        value = v
+        saveConfig()
+        -- sem toast a cada tecla para não poluir
+    end
+    imgui.PopItemWidth()
+    imgui.SameLine()
+
+    -- botão +
+    if imgui.Button(" + ##" .. id .. "i", imgui.ImVec2(32, 26)) then
+        value = math.min(maxValue, value + step)
+        buf.v = value
+        saveConfig()
+        pushToast(label .. ': ' .. tostring(value), true)
+    end
+
+    imgui.PopStyleColor(6)
+    return value
+end
+
+-- Título de seção
+local function sectionTitle(title, subtitle)
+    imgui.TextColored(COL_PURPLE_ACTIVE, title)
+    if subtitle then
+        imgui.TextColored(COL_TEXT_MUTED, subtitle)
+    end
+    imgui.Spacing()
+end
+
+-- Card visual (BeginChild simples, sem bordas pesadas)
+local function beginCard(id, height)
+    imgui.BeginChild(id, imgui.ImVec2(0, height), true)
+end
+
+local function endCard()
+    imgui.EndChild()
+end
+
+-- Lista de arquivos
+local function fileList(id, height, files, selectedPath, basePath, emptyText, onSelect)
+    imgui.BeginChild(id, imgui.ImVec2(0, height), true)
+    if #files == 0 then
+        imgui.TextColored(COL_TEXT_MUTED, emptyText)
+    else
+        for _, filename in ipairs(files) do
+            local selected = selectedPath == basePath .. filename
+            if selected then
+                imgui.PushStyleColor(imgui.Col.Header, COL_PURPLE_DIM)
+                imgui.PushStyleColor(imgui.Col.HeaderHovered, COL_PURPLE_SOFT)
+                imgui.PushStyleColor(imgui.Col.HeaderActive, COL_PURPLE)
+            end
+            if imgui.Selectable("  " .. filename .. "##" .. id .. filename, selected) then
+                onSelect(filename)
+            end
+            if selected then
+                imgui.PopStyleColor(3)
+            end
+        end
+    end
+    imgui.EndChild()
+end
+
+-- ============================================================
+-- INTERFACE
+-- ============================================================
+function imgui.OnDrawFrame()
+    if not menu_open.v and #toasts == 0 then
+        imgui.Process = false
+        return
+    end
+
+    if menu_open.v then
+        -- Tentativa segura de arredondar frames/botões (ImGui antigo pode não ter StyleVar)
+        local styleVarPushed = 0
+        pcall(function()
+            if imgui.StyleVar and imgui.StyleVar.FrameRounding then
+                imgui.PushStyleVar(imgui.StyleVar.FrameRounding, 6)
+                styleVarPushed = styleVarPushed + 1
+            end
+            if imgui.StyleVar and imgui.StyleVar.WindowRounding then
+                imgui.PushStyleVar(imgui.StyleVar.WindowRounding, 8)
+                styleVarPushed = styleVarPushed + 1
+            end
+        end)
+
+        -- Estilo global da janela (somente Col seguros)
+        imgui.PushStyleColor(imgui.Col.WindowBg, COL_BG_DARK)
+        imgui.PushStyleColor(imgui.Col.TitleBg, COL_BG_SIDEBAR)
+        imgui.PushStyleColor(imgui.Col.TitleBgActive, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+        imgui.PushStyleColor(imgui.Col.Header, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.HeaderHovered, COL_PURPLE_SOFT)
+        imgui.PushStyleColor(imgui.Col.HeaderActive, COL_PURPLE)
+        imgui.PushStyleColor(imgui.Col.CheckMark, COL_PURPLE)
+        imgui.PushStyleColor(imgui.Col.FrameBg, COL_BG_CARD)
+        imgui.PushStyleColor(imgui.Col.FrameBgHovered, COL_BG_HOVER)
+        imgui.PushStyleColor(imgui.Col.FrameBgActive, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.Text, COL_TEXT)
+
+        imgui.SetNextWindowSize(imgui.ImVec2(820, 560), imgui.Cond.FirstUseEver)
+        imgui.SetNextWindowPos(imgui.ImVec2(sw / 2, sh / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
+
+        imgui.Begin("HITMARKER  //  CONTROL PANEL", menu_open,
+            imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
+
+        -- Cabeçalho
+        imgui.TextColored(COL_PURPLE_ACTIVE, "HITMARKER")
+        imgui.SameLine(130)
+        imgui.TextColored(COL_TEXT_MUTED, "Painel de Controle")
+        imgui.SameLine(680)
+        -- ONLINE com pulso leve
+        local onlineA = pulse(2.5, 0.70, 1.00)
+        imgui.TextColored(imgui.ImVec4(0.38, 0.88, 0.55, onlineA), "ONLINE")
+        imgui.Spacing()
+
+        -- ============================================================
+        -- SIDEBAR (integrada, sem caixa extra, sem divisórias pesadas)
+        -- ============================================================
+        imgui.BeginChild("##hm_sidebar", imgui.ImVec2(150, 470), false)
+
+        imgui.Spacing()
+        sidebarButton("VISUAL",   1, 140, 40)
+        imgui.Spacing()
+        sidebarButton("SONS",     2, 140, 40)
+        imgui.Spacing()
+        sidebarButton("MUSICA",   3, 140, 40)
+        imgui.Spacing()
+        sidebarButton("AVANCADO", 4, 140, 40)
+
+        imgui.Spacing()
+        imgui.Spacing()
+        imgui.TextColored(COL_TEXT_MUTED, "  ATALHOS")
+        imgui.TextColored(COL_TEXT, "  /hit")
+        imgui.TextColored(COL_TEXT_MUTED, "  abre o painel")
+        imgui.Spacing()
+        imgui.TextColored(COL_TEXT_MUTED, "  v1.7.0")
+
+        imgui.EndChild()
+
+        imgui.SameLine()
+
+        -- ============================================================
+        -- CONTEÚDO
+        -- ============================================================
+        imgui.BeginChild("##hm_content", imgui.ImVec2(630, 470), false)
+
+        ----------------------------------------------------------------
+        -- ABA 1: VISUAL
+        ----------------------------------------------------------------
+        if current_tab == 1 then
+            sectionTitle("VISUAL", "Aparencia, posicao e imagem do hitmarker")
+
+            -- Modo de imagem: fixa / aleatoria / sequencial
+            beginCard("##card_mode", 88)
+            imgui.TextColored(COL_TEXT_MUTED, "MODO DA IMAGEM A CADA ACERTO")
+            imgui.Spacing()
+
+            local mode = ini.MARKER.IMAGE_MODE or 'fixed'
+            local modes = {
+                { 'fixed',  'FIXA' },
+                { 'random', 'ALEATORIA' },
+                { 'cycle',  'SEQUENCIAL' },
+            }
+            for i, m in ipairs(modes) do
+                local active = mode == m[1]
+                if active then
+                    imgui.PushStyleColor(imgui.Col.Button, COL_PURPLE)
+                    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+                    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+                else
+                    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+                    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+                    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+                end
+                if imgui.Button(m[2] .. "##imgmode" .. i, imgui.ImVec2(120, 28)) then
+                    ini.MARKER.IMAGE_MODE = m[1]
+                    saveConfig()
+                    if m[1] ~= 'fixed' then
+                        local n = preloadAllImages()
+                        pushToast('Modo ' .. m[2] .. ' (' .. n .. ' imgs)', true)
+                    else
+                        reloadImage()
+                        pushToast('Modo FIXA', true)
+                    end
+                end
+                imgui.PopStyleColor(3)
+                if i < #modes then imgui.SameLine() end
+            end
+
+            imgui.Spacing()
+            if mode == 'fixed' then
+                imgui.TextColored(COL_TEXT_MUTED, "Usa sempre a imagem selecionada abaixo.")
+            elseif mode == 'random' then
+                imgui.TextColored(COL_TEXT_OK, "Cada acerto sorteia uma PNG da pasta.")
+            else
+                imgui.TextColored(COL_TEXT_OK, "Cada acerto avanca para a proxima PNG.")
+            end
+            endCard()
+
+            imgui.Spacing()
+
+            beginCard("##card_image", 160)
+            imgui.TextColored(COL_TEXT_MUTED, "IMAGEM DO ACERTO")
+            imgui.Spacing()
+
+            local currentName = ini.MARKER.IMAGE_PATH
+            if currentName and currentName ~= '' then
+                local nameOnly = currentName:match("([^\\/]+)$") or currentName
+                imgui.TextColored(COL_TEXT, "Selecionada (modo FIXA):  " .. nameOnly)
+            else
+                imgui.TextColored(COL_TEXT_MUTED, "Nenhuma imagem selecionada")
+            end
+            imgui.TextColored(COL_TEXT_MUTED, string.format("Pre-carregadas: %d / %d", #image_order, #image_files))
+            imgui.Spacing()
+
+            fileList("##hm_image_list", 85, image_files, ini.MARKER.IMAGE_PATH, IMAGES_DIR,
+                "Nenhuma imagem PNG encontrada em hitmarker/images/",
+                function(filename)
+                    ini.MARKER.IMAGE_PATH = IMAGES_DIR .. filename
+                    saveConfig()
+                    local ok2, msg2 = reloadImage()
+                    last_load_status = { ok = ok2, msg = msg2 }
+                    pushToast(ok2 and ("Imagem: " .. filename) or "Falha ao carregar imagem", ok2)
+                end)
+            endCard()
+
+            if last_load_status and current_tab == 1 then
+                imgui.TextColored(last_load_status.ok and COL_TEXT_OK or COL_TEXT_BAD, last_load_status.msg)
+            end
+
+            imgui.Spacing()
+
+            beginCard("##card_pos", 155)
+            imgui.TextColored(COL_TEXT_MUTED, "POSICAO  /  TAMANHO  /  DURACAO")
+            imgui.Spacing()
+            ini.MARKER.X = valueStepper("Posicao X", ini.MARKER.X, "x", -400, 400, 5)
+            ini.MARKER.Y = valueStepper("Posicao Y", ini.MARKER.Y, "y", -400, 400, 5)
+            ini.MARKER.SIZE = valueStepper("Tamanho", ini.MARKER.SIZE, "size", 8, 256, 4)
+            ini.MARKER.DURATION = valueStepper("Duracao (ms)", ini.MARKER.DURATION, "duration", 50, 2000, 50)
+            endCard()
+
+            imgui.Spacing()
+            if primaryButton("TESTAR HITMARKER", imgui.ImVec2(-1, 38)) then
+                triggerHitmarker()
+                pushToast('Hitmarker testado', true)
+            end
+
+        ----------------------------------------------------------------
+        -- ABA 2: SONS
+        ----------------------------------------------------------------
+        elseif current_tab == 2 then
+            sectionTitle("SONS", "Sons de acerto e de dano recebido")
+
+            beginCard("##card_hit_sound", 205)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "QUANDO VOCE ACERTA")
+            imgui.Spacing()
+
+            if toggleButton("Som de acerto", sound_enabled, "sound_enabled") then
+                ini.MARKER.SOUND_ENABLED = sound_enabled.v
+                saveConfig()
+                pushToast(sound_enabled.v and "Som de acerto: ON" or "Som de acerto: OFF", true)
+            end
+
+            if ini.MARKER.SOUND_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.SOUND_VOLUME = valueStepper("Volume", ini.MARKER.SOUND_VOLUME, "soundvol", 0, 100, 5)
+            end
+
+            imgui.Spacing()
+            fileList("##hm_sound_list", 85, sound_files, ini.MARKER.SOUND_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.SOUND_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    last_load_status = { ok = true, msg = "Som de acerto: " .. filename }
+                    playHitSound()
+                    pushToast("Som de acerto: " .. filename, true)
+                end)
+            endCard()
+
+            imgui.Spacing()
+            if secondaryButton("TESTAR SOM DE ACERTO", imgui.ImVec2(-1, 32)) then
+                playHitSound()
+            end
+
+            imgui.Spacing()
+            imgui.Spacing()
+
+            beginCard("##card_pain_sound", 205)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "QUANDO VOCE LEVA O TIRO")
+            imgui.Spacing()
+
+            if toggleButton("Som ao levar tiro", pain_sound_enabled, "pain_enabled") then
+                ini.MARKER.PAIN_SOUND_ENABLED = pain_sound_enabled.v
+                saveConfig()
+                pushToast(pain_sound_enabled.v and "Som de dano: ON" or "Som de dano: OFF", true)
+            end
+
+            if ini.MARKER.PAIN_SOUND_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.PAIN_SOUND_VOLUME = valueStepper("Volume", ini.MARKER.PAIN_SOUND_VOLUME, "painvol", 0, 100, 5)
+            end
+
+            imgui.Spacing()
+            fileList("##hm_pain_sound_list", 85, sound_files, ini.MARKER.PAIN_SOUND_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.PAIN_SOUND_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    last_load_status = { ok = true, msg = "Som ao levar tiro: " .. filename }
+                    playPainSound()
+                    pushToast("Som de dano: " .. filename, true)
+                end)
+            endCard()
+
+            imgui.Spacing()
+            if secondaryButton("TESTAR SOM AO LEVAR TIRO", imgui.ImVec2(-1, 32)) then
+                playPainSound()
+            end
+
+        ----------------------------------------------------------------
+        -- ABA 3: MÚSICA
+        ----------------------------------------------------------------
+        elseif current_tab == 3 then
+            sectionTitle("MUSICA", "Musica de fundo em loop continuo")
+
+            beginCard("##card_music", 115)
+            if toggleButton("Ativar musica de fundo", music_enabled, "music_enabled") then
+                ini.MARKER.MUSIC_ENABLED = music_enabled.v
+                saveConfig()
+                if ini.MARKER.MUSIC_ENABLED then
+                    playMusic()
+                    pushToast("Musica: ON", true)
+                else
+                    stopMusic()
+                    pushToast("Musica: OFF", true)
+                end
+            end
+
+            if ini.MARKER.MUSIC_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.MUSIC_VOLUME = valueStepper("Volume", ini.MARKER.MUSIC_VOLUME, "musicvol", 0, 100, 5)
+                if music_audio then
+                    imgui.TextColored(COL_TEXT_OK, "  Reproduzindo agora")
+                end
+            else
+                imgui.Spacing()
+                imgui.TextColored(COL_TEXT_MUTED, "  Musica desativada")
+            end
+            endCard()
+
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT_MUTED, "FAIXAS DISPONIVEIS")
+            imgui.Spacing()
+
+            fileList("##hm_music_list", 250, sound_files, ini.MARKER.MUSIC_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.MUSIC_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    if ini.MARKER.MUSIC_ENABLED then playMusic() end
+                    last_load_status = { ok = true, msg = "Musica escolhida: " .. filename }
+                    pushToast("Musica: " .. filename, true)
+                end)
+
+        ----------------------------------------------------------------
+        -- ABA 4: AVANÇADO
+        ----------------------------------------------------------------
+        elseif current_tab == 4 then
+            sectionTitle("AVANCADO", "Ferramentas e controles extras")
+
+            beginCard("##card_lists", 90)
+            imgui.TextColored(COL_TEXT_MUTED, "ARQUIVOS DETECTADOS")
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT, string.format("%d imagem(ns)   •   %d som(ns)", #image_files, #sound_files))
+            imgui.Spacing()
+            if secondaryButton("ATUALIZAR LISTAS DE ARQUIVOS", imgui.ImVec2(-1, 32)) then
+                refreshFileLists()
+                local n = preloadAllImages()
+                reloadImage()
+                pushToast("Listas atualizadas (" .. n .. " imgs)", true)
+            end
+            endCard()
+
+            imgui.Spacing()
+            imgui.Spacing()
+
+            beginCard("##card_testkey", 140)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "TECLA DE TESTE")
+            imgui.Spacing()
+
+            if toggleButton("Ativar tecla de teste", test_enabled, "test_enabled") then
+                ini.MARKER.TEST_ENABLED = test_enabled.v
+                saveConfig()
+                pushToast(test_enabled.v and "Tecla de teste: ON" or "Tecla de teste: OFF", true)
+            end
+
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT_MUTED, "Tecla configurada")
+            local keyName = binding and "PRESSIONE UMA TECLA..." or
+                (vkeys.id_to_name(ini.MARKER.TESTKEY) or ("#" .. tostring(ini.MARKER.TESTKEY)))
+
+            if secondaryButton(keyName .. "##hm_testkey", imgui.ImVec2(-1, 34)) then
+                binding = true
+            end
+
+            if binding then
+                imgui.TextColored(imgui.ImVec4(1.0, 0.70, 0.30, 1.0), "Pressione uma tecla...  (ESC cancela)")
+            end
+            endCard()
+
+            imgui.Spacing()
+            if primaryButton("TESTAR HITMARKER AGORA", imgui.ImVec2(-1, 40)) then
+                triggerHitmarker()
+                pushToast("Hitmarker testado", true)
+            end
+        end
+
+        imgui.EndChild() -- ##hm_content
+        imgui.End()
+
+        imgui.PopStyleColor(14)
+        if styleVarPushed > 0 then
+            pcall(function() imgui.PopStyleVar(styleVarPushed) end)
+        end
+    end -- if menu_open.v
+
+    -- ============================================================
+    -- TOASTS
+    -- ============================================================
+    if #toasts > 0 then
+        local toastY = 20
+        for i, t in ipairs(toasts) do
+            local alpha = 1.0
+            local remaining = t.expire - os.clock()
+            if remaining < 0.6 then
+                alpha = math.max(0.0, remaining / 0.6)
+            end
+
+            local bgCol = t.ok
+                and imgui.ImVec4(0.10, 0.18, 0.14, 0.92 * alpha)
+                or  imgui.ImVec4(0.26, 0.10, 0.12, 0.92 * alpha)
+
+            local textCol = t.ok
+                and imgui.ImVec4(0.70, 1.00, 0.78, alpha)
+                or  imgui.ImVec4(1.00, 0.70, 0.72, alpha)
+
+            imgui.SetNextWindowPos(imgui.ImVec2(sw - 320, toastY), imgui.Cond.Always)
+            imgui.SetNextWindowSize(imgui.ImVec2(300, 48), imgui.Cond.Always)
+
+            imgui.PushStyleColor(imgui.Col.WindowBg, bgCol)
+            imgui.PushStyleColor(imgui.Col.Text, textCol)
+
+            local flags = imgui.WindowFlags.NoTitleBar
+                + imgui.WindowFlags.NoResize
+                + imgui.WindowFlags.NoMove
+                + imgui.WindowFlags.NoScrollbar
+                + imgui.WindowFlags.NoCollapse
+
+            imgui.Begin("##toast_" .. i, nil, flags)
+            local prefix = t.ok and "[OK]  " or "[X]  "
+            imgui.Text(prefix .. t.text)
+            imgui.End()
+
+            imgui.PopStyleColor(2)
+            toastY = toastY + 56
+        end
+    end
+end
+
+-- Desenha o hitmarker na posição/tamanho configurados enquanto estiver ativo
+addEventHandler('onD3DPresent', function()
+    if texture and os.clock() < showUntil then
+        local size = ini.MARKER.SIZE
+        local x = sw / 2 - size / 2 + ini.MARKER.X
+        local y = sh / 2 - size / 2 + ini.MARKER.Y
+        renderDrawTexture(texture, x, y, size, size, 0.0, 0xFFFFFFFF)
+    end
+end)
+
+-- Para todos os sons ao descarregar o script
+function onScriptTerminate(script)
+    if script == thisScript() then
+        stopMusic()
+        if audio then pcall(setAudioStreamState, audio, 0) end
+        if pain_audio then pcall(setAudioStreamState, pain_audio, 0) end
+    end
 end
