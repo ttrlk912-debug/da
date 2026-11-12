@@ -1,1677 +1,1098 @@
-local wm = require("windows.message")
-local vkeys = require("vkeys")
-local imgui = require("mimgui")
-local sampev = require("samp.events")
-local ffi = require("ffi")
-local memory = require("memory")
-local vector3d = require("vector3d")
+script_name('Hitmarker')
+script_author('Codex')
+script_description('Mostra uma imagem e toca um som quando o DamageInformer detecta um acerto.')
+script_version('1.7.0')
 
-local font_flag = require("moonloader").font_flag
-local font = renderCreateFont("Arial", 12, font_flag.BOLD + font_flag.SHADOW + font_flag.BORDER)
+require 'lib.moonloader'
+local sampev = require 'lib.samp.events'
+local inicfg = require 'inicfg'
+local imgui = require 'imgui'
+local vkeys = require 'vkeys'
+local wm = require 'windows.message'
+local lfs = require 'lfs'
 
-local VERSION = "1.0"
+-- ==============================
+-- CONFIGURAÇÃO FIXA
+-- ==============================
 
-local getBonePosition = ffi.cast("int (__thiscall*)(void*, float*, int, bool)", 0x5E4280)
+-- Esses valores só são usados na PRIMEIRA vez que o script roda (para criar o .ini).
+-- Depois disso, os caminhos ficam salvos em Hitmarker.ini e podem ser trocados
+-- direto pelo menu do jogo (/hit), sem precisar editar o script.
+local DEFAULT_IMAGE_PATH = 'C:\\Users\\mn_alves\\Downloads\\GTA ANT FPS\\modloader\\twdoban.png'
+local DEFAULT_SOUND_PATH = 'C:\\Users\\mn_alves\\Downloads\\GTA ANT FPS\\moonloader\\gamefixer\\GENRL\\Deagle6.wav'
 
-math.randomseed(os.time())
+-- Pasta de imagens: sua própria, criada automaticamente na primeira vez que
+-- o script roda. Pasta de sons: a MESMA que o GameFixer (Ultimate Genrl) já
+-- usa (moonloader/gamefixer/genrl/), pra reaproveitar os sons que você já tem
+-- (Deagle, Bell, Pain, etc.) em vez de duplicar arquivo. O menu (/hit) lista
+-- tudo que estiver nessas pastas e você escolhe clicando, sem digitar caminho.
+local IMAGES_DIR = 'moonloader\\hitmarker\\images\\'
+local SOUNDS_DIR = 'moonloader/gamefixer/genrl/'
 
-
-
-local _menu_tab = "Main"
-local _last_target = 65535
-local _shots = 0
-local _log_data = {}
-local _last_log_size = 0
-
-local _state      = imgui.new.bool(false)
-local _window     = imgui.new.bool(false)
-local _log_window = imgui.new.bool(false)
-
-local _binding = nil
-local _last_bone = nil
-local _last_weapon = nil
-local _legit = nil
-local _last_infrun_state = nil
-
-local _ignored_nicks = {}
-local _ignored_skins = {}
-
-
-
--- ============================================
--- PUXAR ARMA - CONFIG
--- ============================================
-local _puxar_max_distance  = 30.0
-local _puxar_server_cmd    = "/pegararma"
-local _puxar_busy          = false
-local _puxar_status        = "Pronto"
-local _puxar_status_color  = 0xFFFFFFFF
-local _puxar_list          = {}
-
-local _weaponModels = {
-   [321]=true,[322]=true,[323]=true,[324]=true,[325]=true,
-   [326]=true,[331]=true,[333]=true,[334]=true,[335]=true,
-   [336]=true,[337]=true,[338]=true,[339]=true,[341]=true,
-   [342]=true,[343]=true,[344]=true,[345]=true,[346]=true,
-   [347]=true,[348]=true,[349]=true,[350]=true,[351]=true,
-   [352]=true,[353]=true,[354]=true,[355]=true,[356]=true,
-   [357]=true,[358]=true,[359]=true,[360]=true,[361]=true,
-   [362]=true,[363]=true,[364]=true,[365]=true,[366]=true,
-   [367]=true,[368]=true,[369]=true,[371]=true,[372]=true
-}
-
-local _weaponNames = {
-   [321] = "Colt 45",
-   [322] = "Silenced",
-   [323] = "Deagle",
-   [324] = "Shotgun",
-   [325] = "Sawn-off",
-   [326] = "Combat Shotgun",
-   [331] = "Micro SMG",
-   [333] = "MP5",
-   [334] = "AK-47",
-   [335] = "M4",
-   [336] = "Tec-9",
-   [337] = "Rifle",
-   [338] = "Sniper",
-   [339] = "RPG",
-   [341] = "Minigun",
-   [342] = "Grenade",
-   [343] = "Smoke",
-   [344] = "Molotov",
-   [345] = "Ammo",
-   [346] = "Pistol",
-   [347] = "Silenced Pistol",
-   [348] = "Desert Eagle",
-   [349] = "Shotgun2",
-   [350] = "Sawnoff2",
-   [351] = "CombatShotgun2",
-   [352] = "Micro SMG2",
-   [353] = "MP52",
-   [354] = "Flare",
-   [355] = "AK-47 v2",
-   [356] = "M4 v2",
-   [357] = "Cuntgun",
-   [358] = "Sniper2",
-   [359] = "Rocket",
-   [360] = "HS Rocket",
-   [361] = "Flamethrower",
-   [362] = "Minigun2",
-   [363] = "Satchel",
-   [364] = "Detonator",
-   [365] = "Spraycan",
-   [366] = "Fire Ext",
-   [367] = "Camera",
-   [368] = "NV Goggles",
-   [369] = "IR Goggles",
-   [371] = "Parachute",
-   [372] = "Fake Pistol",
-}
-
-
-
-_config = {
-   initmsg            = true,
-   cmd                = "sys",
-   onatstart          = false,
-   fov                = 20,
-   hit                = 100,
-   serialmisses       = false,
-   preferboneupd      = 2,
-   missafter          = 4,
-   fromthehip         = false,
-   lockactive         = false,
-   lockbutton         = 0x58,
-   menubutton         = 0x55,
-   statebutton        = 0x4A,
-   combobutton        = 0x0,
-   syncrotation       = true,
-   syncaimz           = true,
-   ignoreobj          = false,
-   ignoreveh          = false,
-   ignoremyclist      = false,
-   ignorebyskin       = false,
-   ignorebynick       = false,
-   debug              = false,
-   indivfov           = false,
-   indivhit           = false,
-   wallshot           = false,
-   cumbypass          = false,
-   infrun             = false,
-   minfakeaimdist     = 2,
-   maxfakeaimdist     = 80,
-   minspread          = -0.05,
-   maxspread          = 0.05,
-   faketarget         = true,
-   maxfaketargetdist  = 30,
-   guns               = {},
-   bones              = { true, true, false, false, false, false, false },
-
-   esp_active         = false,
-   esp_box            = true,
-   esp_names          = true,
-   esp_lines          = false,
-   esp_skin_id        = false,
-   globalDistance     = 300,
-   deagleDistance     = 30,
-   m4Distance         = 60,
-}
-
-
-
-local _save_map = {
-   fov = "cfg_01", hit = "cfg_02", serialmisses = "cfg_03",
-   preferboneupd = "cfg_04", missafter = "cfg_05", fromthehip = "cfg_06",
-   lockactive = "cfg_07", lockbutton = "cfg_08", menubutton = "cfg_09",
-   statebutton = "cfg_10", combobutton = "cfg_11", onatstart = "cfg_12",
-   initmsg = "cfg_13", debug = "cfg_14",
-   syncrotation = "net_01", syncaimz = "net_02", faketarget = "net_03",
-   cumbypass = "net_04", wallshot = "net_05", infrun = "net_06",
-   ignoreobj = "ign_01", ignoreveh = "ign_02", ignoremyclist = "ign_03",
-   ignorebyskin = "ign_04", ignorebynick = "ign_05",
-   indivfov = "opt_01", indivhit = "opt_02",
-   minfakeaimdist = "rng_01", maxfakeaimdist = "rng_02",
-   minspread = "rng_03", maxspread = "rng_04", maxfaketargetdist = "rng_05",
-   esp_active = "esp_01", esp_box = "esp_02", esp_names = "esp_03",
-   esp_lines = "esp_04", esp_skin_id = "esp_05",
-   globalDistance = "esp_06", deagleDistance = "esp_07", m4Distance = "esp_08",
-}
-
-local _load_map = {}
-for real, crypto in pairs(_save_map) do
-   _load_map[crypto] = real
+local function ensureDir(path)
+    if not doesDirectoryExist(path) then
+        createDirectory(path)
+    end
 end
 
-local _color_map = {
-   ["clr_01a"] = { "_esp_color_box",     0 }, ["clr_01b"] = { "_esp_color_box",     1 }, ["clr_01c"] = { "_esp_color_box",     2 },
-   ["clr_02a"] = { "_esp_color_blocked", 0 }, ["clr_02b"] = { "_esp_color_blocked", 1 }, ["clr_02c"] = { "_esp_color_blocked", 2 },
-   ["clr_03a"] = { "_esp_color_name",    0 }, ["clr_03b"] = { "_esp_color_name",    1 }, ["clr_03c"] = { "_esp_color_name",    2 },
-   ["clr_04a"] = { "_esp_color_id",      0 }, ["clr_04b"] = { "_esp_color_id",      1 }, ["clr_04c"] = { "_esp_color_id",      2 },
-   ["clr_05a"] = { "_esp_color_line",    0 }, ["clr_05b"] = { "_esp_color_line",    1 }, ["clr_05c"] = { "_esp_color_line",    2 },
-}
-
-local _username = os.getenv("USERNAME") or "User"
-local _save_dir  = "C:\\Users\\" .. _username .. "\\AppData\\Local\\Microsoft\\Windows\\INetCache\\"
-local _save_file = _save_dir .. "dx9stat.dat"
-
-
-
-function _saveConfig()
-   pcall(function()
-      if not doesDirectoryExist(_save_dir) then
-         createDirectory(_save_dir)
-      end
-
-      local f = io.open(_save_file, "w")
-      if not f then return end
-
-      for real_name, crypto_name in pairs(_save_map) do
-         local value = _config[real_name]
-         if value ~= nil then
-            if type(value) == "boolean" then
-               f:write(crypto_name.."="..tostring(value).."\n")
-            elseif type(value) == "number" then
-               f:write(crypto_name.."="..value.."\n")
+-- Lista os arquivos de uma pasta cujo nome bate com o padrão (ex: '%.png$').
+-- Igual ao getListOfSounds() do GameFixer: chama lfs.dir direto, sem checar
+-- doesDirectoryExist antes (esse checador às vezes não bate com o caminho
+-- relativo do jeito que o lfs reconhece, e a lista ficava sempre vazia).
+local function listFiles(dir, extPattern)
+    local files = {}
+    pcall(function()
+        for file in lfs.dir(dir) do
+            if file ~= '.' and file ~= '..' and file:lower():match(extPattern) then
+                table.insert(files, file)
             end
-         end
-      end
-
-      if _esp_color_box then
-         f:write("clr_01a=".._esp_color_box[0].."\n")
-         f:write("clr_01b=".._esp_color_box[1].."\n")
-         f:write("clr_01c=".._esp_color_box[2].."\n")
-      end
-      if _esp_color_blocked then
-         f:write("clr_02a=".._esp_color_blocked[0].."\n")
-         f:write("clr_02b=".._esp_color_blocked[1].."\n")
-         f:write("clr_02c=".._esp_color_blocked[2].."\n")
-      end
-      if _esp_color_name then
-         f:write("clr_03a=".._esp_color_name[0].."\n")
-         f:write("clr_03b=".._esp_color_name[1].."\n")
-         f:write("clr_03c=".._esp_color_name[2].."\n")
-      end
-      if _esp_color_id then
-         f:write("clr_04a=".._esp_color_id[0].."\n")
-         f:write("clr_04b=".._esp_color_id[1].."\n")
-         f:write("clr_04c=".._esp_color_id[2].."\n")
-      end
-      if _esp_color_line then
-         f:write("clr_05a=".._esp_color_line[0].."\n")
-         f:write("clr_05b=".._esp_color_line[1].."\n")
-         f:write("clr_05c=".._esp_color_line[2].."\n")
-      end
-
-      f:write("pxr_01=".._puxar_max_distance.."\n")
-      f:write("pxr_02=".._puxar_server_cmd.."\n")
-
-      if _ignored_skins then
-         for i, skin in ipairs(_ignored_skins) do
-            f:write("sk_"..string.format("%03d", i).."="..skin.."\n")
-         end
-      end
-      if _ignored_nicks then
-         for i, nick in ipairs(_ignored_nicks) do
-            f:write("nk_"..string.format("%03d", i).."="..nick.."\n")
-         end
-      end
-
-      f:close()
-   end)
+        end
+    end)
+    table.sort(files)
+    return files
 end
 
-function _loadConfig()
-   if not doesFileExist(_save_file) then return false end
+-- Padrão do texto que identifica um acerto SEU no chat (dano causado, não recebido).
+--
+-- Confirmado com o log real do seu servidor:
+--   Você acerta:  "-DamageInformer- Você fez 1 de dano em ID 234068 com Soco..."
+--   Você leva:    "-DamageInformer- ID 234068 fez 1 de dano com Soco..."
+--
+-- Em vez de procurar a palavra "Você" (acento pode vir com encoding diferente
+-- no SA:MP e quebrar a comparação), a gente identifica pelo formato: se logo
+-- depois de "DamageInformer- " vem "ID <número> fez", é dano QUE VOCÊ LEVOU
+-- -> ignora. Qualquer outra mensagem com "DamageInformer" + "fez" é dano que
+-- você causou -> dispara o hitmarker. Isso funciona independente de acento.
+local HIT_RECEIVED_PATTERN = 'DamageInformer%-%s*ID %d+ fez'
 
-   local f = io.open(_save_file, "r")
-   if not f then return false end
+-- Ative para ver no chat o texto bruto de cada mensagem recebida (debug).
+-- Útil se o padrão acima não bater com o formato do SEU servidor: ligue isso,
+-- tome um dano e um acerto, e compare o texto exato que aparece no chat.
+local DEBUG_LOG_MESSAGES = false
 
-   if _ignored_skins then
-      for i = #_ignored_skins, 1, -1 do table.remove(_ignored_skins, i) end
-   end
-   if _ignored_nicks then
-      for i = #_ignored_nicks, 1, -1 do table.remove(_ignored_nicks, i) end
-   end
+-- Comando para abrir o menu de configuração
+local MENU_COMMAND = 'hit'
 
-   for line in f:lines() do
-      local key, value = line:match("^([^=]+)=(.+)$")
-      if key and value then
-         local real_name = _load_map[key]
-         if real_name then
-            if value == "true" then
-               _config[real_name] = true
-            elseif value == "false" then
-               _config[real_name] = false
-            else
-               local num = tonumber(value)
-               if num then _config[real_name] = num end
-            end
-         end
+-- ==============================
+-- CONFIGURAÇÃO SALVA (INI)
+-- ==============================
+local iniPath = 'Hitmarker.ini'
+local ini = inicfg.load({
+    MARKER = {
+        X = 0,          -- deslocamento em relação ao centro da tela
+        Y = 0,
+        SIZE = 48,
+        DURATION = 250, -- ms
+        TESTKEY = vkeys.VK_F6, -- tecla usada para testar manualmente
+        TEST_ENABLED = false,  -- se a tecla de teste está ativa
+        SOUND_ENABLED = true,  -- se o som de acerto está ativo
+        SOUND_VOLUME = 100,    -- volume (0-100)
+        IMAGE_PATH = DEFAULT_IMAGE_PATH,
+        SOUND_PATH = DEFAULT_SOUND_PATH,
+        PAIN_SOUND_ENABLED = false, -- se o som de "levei tiro" está ativo
+        PAIN_SOUND_VOLUME = 100,
+        PAIN_SOUND_PATH = '',       -- escolhido pelo menu, na pasta de sons
+        MUSIC_ENABLED = false, -- musica de fundo em loop
+        MUSIC_VOLUME = 50,
+        MUSIC_PATH = '',
+        -- fixed = sempre a mesma imagem | random = aleatoria | cycle = em sequencia
+        IMAGE_MODE = 'fixed',
+    }
+}, iniPath)
 
-         local color_info = _color_map[key]
-         if color_info then
-            local ptr_name, idx = color_info[1], color_info[2]
-            local num = tonumber(value)
-            if num and _G[ptr_name] then
-               _G[ptr_name][idx] = num
-            end
-         end
+-- Garante valores padrão para campos novos, mesmo se o .ini já existia
+-- de uma versão anterior do script (sem esses campos).
+if ini.MARKER.TEST_ENABLED == nil then ini.MARKER.TEST_ENABLED = false end
+if ini.MARKER.SOUND_ENABLED == nil then ini.MARKER.SOUND_ENABLED = true end
+if ini.MARKER.SOUND_VOLUME == nil then ini.MARKER.SOUND_VOLUME = 100 end
+if ini.MARKER.IMAGE_PATH == nil or ini.MARKER.IMAGE_PATH == '' then ini.MARKER.IMAGE_PATH = DEFAULT_IMAGE_PATH end
+if ini.MARKER.SOUND_PATH == nil or ini.MARKER.SOUND_PATH == '' then ini.MARKER.SOUND_PATH = DEFAULT_SOUND_PATH end
+if ini.MARKER.PAIN_SOUND_ENABLED == nil then ini.MARKER.PAIN_SOUND_ENABLED = false end
+if ini.MARKER.PAIN_SOUND_VOLUME == nil then ini.MARKER.PAIN_SOUND_VOLUME = 100 end
+if ini.MARKER.PAIN_SOUND_PATH == nil then ini.MARKER.PAIN_SOUND_PATH = '' end
+if ini.MARKER.MUSIC_ENABLED == nil then ini.MARKER.MUSIC_ENABLED = false end
+if ini.MARKER.MUSIC_VOLUME == nil then ini.MARKER.MUSIC_VOLUME = 50 end
+if ini.MARKER.MUSIC_PATH == nil then ini.MARKER.MUSIC_PATH = '' end
+if ini.MARKER.IMAGE_MODE == nil or ini.MARKER.IMAGE_MODE == '' then ini.MARKER.IMAGE_MODE = 'fixed' end
 
-         if key == "pxr_01" then
-            local num = tonumber(value)
-            if num then _puxar_max_distance = num end
-         end
-         if key == "pxr_02" then
-            _puxar_server_cmd = value
-         end
+inicfg.save(ini, iniPath)
 
-         local skin_key = key:match("^sk_(%d+)$")
-         if skin_key and _ignored_skins then
-            table.insert(_ignored_skins, tonumber(value))
-         end
-
-         local nick_key = key:match("^nk_(%d+)$")
-         if nick_key and _ignored_nicks then
-            table.insert(_ignored_nicks, value)
-         end
-      end
-   end
-
-   f:close()
-   return true
+local function saveConfig()
+    inicfg.save(ini, iniPath)
 end
 
+-- ==============================
+-- ESTADO INTERNO
+-- ==============================
+local texture = nil
+local showUntil = 0
+local sw, sh = getScreenResolution()
 
+-- Pool de texturas para modo random/cycle (filename -> texture handle)
+local image_textures = {}  -- [filename] = texture
+local image_order = {}     -- lista ordenada de filenames carregados
+local cycle_index = 1      -- indice atual no modo cycle
 
--- ============================================
--- PUXAR ARMA - FUNÇÕES
--- ============================================
-function _puxar_distance3d(x1, y1, z1, x2, y2, z2)
-   local dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
-   return math.sqrt(dx * dx + dy * dy + dz * dz)
+local menu_open = imgui.ImBool(false)
+local test_enabled = imgui.ImBool(ini.MARKER.TEST_ENABLED)
+local sound_enabled = imgui.ImBool(ini.MARKER.SOUND_ENABLED)
+local pain_sound_enabled = imgui.ImBool(ini.MARKER.PAIN_SOUND_ENABLED)
+local music_enabled = imgui.ImBool(ini.MARKER.MUSIC_ENABLED)
+local current_tab = 1 -- 1 = Visual, 2 = Sons, 3 = Musica, 4 = Avancado
+
+-- Listas de arquivos encontrados em IMAGES_DIR / SOUNDS_DIR (preenchidas em main())
+local image_files = {}
+local sound_files = {}
+local last_load_status = nil -- mensagem de status mostrada no menu após escolher um arquivo
+
+local function refreshFileLists()
+    image_files = listFiles(IMAGES_DIR, '%.png$')
+    sound_files = listFiles(SOUNDS_DIR, '%.wav$') -- moonloader só toca .wav/.mp3 nativamente sem libs extras
+    for _, f in ipairs(listFiles(SOUNDS_DIR, '%.mp3$')) do
+        table.insert(sound_files, f)
+    end
+    table.sort(sound_files)
 end
 
-function _puxar_normalize(a, b, c, d)
-   if type(a) == "boolean" then
-      if not a then return nil end
-      a, b, c = b, c, d
-   end
-   if type(a) ~= "number" or type(b) ~= "number" or type(c) ~= "number" then
-      return nil
-   end
-   return a, b, c
+-- Estado de captura de tecla (quando o usuário clica em "Alterar" no menu)
+local binding = false
+
+local audio = nil
+local pain_audio = nil -- stream separado pro som de "levei tiro", pra não cortar o som de acerto
+local music_audio = nil -- stream da música de fundo (com loop manual)
+
+-- ==============================
+-- TOAST SYSTEM (notificações visuais)
+-- ==============================
+local toasts = {} -- { text, expire, ok }
+
+local function pushToast(text, ok)
+    table.insert(toasts, {
+        text = text,
+        expire = os.clock() + 3.0,
+        ok = ok
+    })
+    while #toasts > 4 do
+        table.remove(toasts, 1)
+    end
+    imgui.Process = true
 end
 
--- Escaneia e retorna TODAS as armas num raio, ordenadas por distância
-function _puxar_scanNearby(px, py, pz)
-   local list = {}
+-- ==============================
+-- CARREGAMENTO DE IMAGEM / SOM
+-- ==============================
 
-   -- Pickups
-   for pickupId = 0, 4095 do
-      local handle = sampGetPickupHandleBySampId(pickupId)
-      if handle and handle ~= 0 and doesPickupExist(handle) then
-         local model
-         if type(sampGetPickupModelTypeBySampId) == "function" then
-            model = sampGetPickupModelTypeBySampId(pickupId)
-         elseif type(sampGetPickupModelBySampId) == "function" then
-            model = sampGetPickupModelBySampId(pickupId)
-         end
+local function reloadImage()
+    local path = ini.MARKER.IMAGE_PATH
+    if not doesFileExist(path) then
+        texture = nil
+        return false, 'Imagem nao encontrada: ' .. path
+    end
 
-         if _weaponModels[model] then
-            local x, y, z = _puxar_normalize(getPickupCoordinates(handle))
-            if x then
-               local dist = _puxar_distance3d(px, py, pz, x, y, z)
-               if dist <= _puxar_max_distance then
-                  table.insert(list, {
-                     model = model,
-                     name = _weaponNames[model] or ("Arma #"..model),
-                     x = x, y = y, z = z,
-                     distance = dist,
-                     kind = "pickup",
-                     id = pickupId
-                  })
-               end
-            end
-         end
-      end
-   end
-
-   -- Objetos
-   for objectId = 0, 999 do
-      local handle = sampGetObjectHandleBySampId(objectId)
-      if handle and doesObjectExist(handle) then
-         local model = getObjectModel(handle)
-         if _weaponModels[model] then
-            local x, y, z = _puxar_normalize(getObjectCoordinates(handle))
-            if x then
-               local dist = _puxar_distance3d(px, py, pz, x, y, z)
-               if dist <= _puxar_max_distance then
-                  table.insert(list, {
-                     model = model,
-                     name = _weaponNames[model] or ("Objeto #"..model),
-                     x = x, y = y, z = z,
-                     distance = dist,
-                     kind = "object",
-                     id = objectId
-                  })
-               end
-            end
-         end
-      end
-   end
-
-   -- Ordena por distância
-   table.sort(list, function(a, b) return a.distance < b.distance end)
-
-   return list
+    local ok, result = pcall(renderLoadTextureFromFile, path)
+    if ok and result then
+        texture = result
+        collectgarbage()
+        return true, 'Imagem carregada com sucesso.'
+    else
+        texture = nil
+        return false, 'Falha ao carregar a imagem (verifique se e um PNG valido). Erro: ' .. tostring(result)
+    end
 end
 
--- Atualiza a lista da UI
-function _puxar_refreshList()
-   if not sampIsLocalPlayerSpawned() then
-      _puxar_list = {}
-      return
-   end
-   local px, py, pz = getCharCoordinates(PLAYER_PED)
-   _puxar_list = _puxar_scanNearby(px, py, pz)
+-- Pre-carrega todas as PNGs da pasta para uso em random/cycle
+local function preloadAllImages()
+    image_textures = {}
+    image_order = {}
+    cycle_index = 1
+
+    for _, filename in ipairs(image_files) do
+        local path = IMAGES_DIR .. filename
+        local ok, result = pcall(renderLoadTextureFromFile, path)
+        if ok and result then
+            image_textures[filename] = result
+            table.insert(image_order, filename)
+        end
+    end
+    collectgarbage()
+    return #image_order
 end
 
--- Executa a coleta de uma entrada específica da lista
-function _puxar_executeFromList(entry)
-   if _puxar_busy then return end
-   if not sampIsLocalPlayerSpawned() then
-      _puxar_status = "Entre no jogo primeiro"
-      _puxar_status_color = 0xFFFF5555
-      return
-   end
-   if isCharInAnyCar(PLAYER_PED) then
-      _puxar_status = "Saia do veiculo primeiro"
-      _puxar_status_color = 0xFFFF5555
-      return
-   end
+-- Escolhe a textura do hit conforme IMAGE_MODE e aplica em `texture`
+local function pickHitImage()
+    local mode = ini.MARKER.IMAGE_MODE or 'fixed'
 
-   local x, y, z = getCharCoordinates(PLAYER_PED)
+    if mode == 'fixed' or #image_order == 0 then
+        -- modo fixo: mantém a textura atual (reloadImage já cuidou)
+        return
+    end
 
-   _puxar_busy = true
-   _puxar_status = string.format("Puxando %s (%.1fm)...", entry.name, entry.distance)
-   _puxar_status_color = 0xFF66FF99
+    local chosen = nil
 
-   lua_thread.create(function()
-      local cameraLocked = false
-      local function restore()
-         pcall(setCharCoordinates, PLAYER_PED, x, y, z)
-         pcall(freezeCharPosition, PLAYER_PED, false)
-         pcall(setCharVisible, PLAYER_PED, true)
-         if cameraLocked and type(restoreCameraJumpcut) == "function" then
-            pcall(restoreCameraJumpcut)
-         end
-      end
+    if mode == 'random' then
+        local idx = math.random(1, #image_order)
+        chosen = image_order[idx]
+    elseif mode == 'cycle' then
+        if cycle_index > #image_order then
+            cycle_index = 1
+        end
+        chosen = image_order[cycle_index]
+        cycle_index = cycle_index + 1
+        if cycle_index > #image_order then
+            cycle_index = 1
+        end
+    end
 
-      local ok = xpcall(function()
-         if type(getActiveCameraCoordinates) == "function"
-            and type(getActiveCameraPointAt) == "function"
-            and type(setFixedCameraPosition) == "function"
-            and type(pointCameraAtPoint) == "function" then
-            local cx, cy, cz = getActiveCameraCoordinates()
-            local lx, ly, lz = getActiveCameraPointAt()
-            setFixedCameraPosition(cx, cy, cz, 0.0, 0.0, 0.0)
-            pointCameraAtPoint(lx, ly, lz, 2)
-            cameraLocked = true
-         end
-
-         setCharVisible(PLAYER_PED, false)
-         freezeCharPosition(PLAYER_PED, true)
-         setCharCoordinates(PLAYER_PED, entry.x, entry.y, entry.z + 0.15)
-         wait(300)
-         sampSendChat(_puxar_server_cmd)
-         wait(450)
-      end, debug.traceback)
-
-      restore()
-      _puxar_busy = false
-
-      if ok then
-         _puxar_status = entry.name.." coletada!"
-         _puxar_status_color = 0xFF66FF99
-      else
-         _puxar_status = "Erro ao coletar"
-         _puxar_status_color = 0xFFFF5555
-      end
-   end)
+    if chosen and image_textures[chosen] then
+        texture = image_textures[chosen]
+    end
 end
 
-function _puxar_main()
-   if _puxar_busy then
-      _puxar_status = "Ja estou puxando..."
-      _puxar_status_color = 0xFFFFAA33
-      return
-   end
+local function playHitSound()
+    if not ini.MARKER.SOUND_ENABLED then
+        return
+    end
 
-   if not sampIsLocalPlayerSpawned() then
-      _puxar_status = "Entre no jogo primeiro"
-      _puxar_status_color = 0xFFFF5555
-      return
-   end
+    if audio then
+        pcall(setAudioStreamState, audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, audio) end
+        audio = nil
+        collectgarbage()
+    end
 
-   if isCharInAnyCar(PLAYER_PED) then
-      _puxar_status = "Saia do veiculo primeiro"
-      _puxar_status_color = 0xFFFF5555
-      return
-   end
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.SOUND_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar o som de acerto', false)
+        return
+    end
 
-   _puxar_refreshList()
-
-   if #_puxar_list == 0 then
-      _puxar_status = string.format("Nenhuma arma em %.0fm", _puxar_max_distance)
-      _puxar_status_color = 0xFFFFAA33
-      return
-   end
-
-   _puxar_executeFromList(_puxar_list[1])
+    audio = streamOrErr
+    setAudioStreamVolume(audio, ini.MARKER.SOUND_VOLUME / 100)
+    setAudioStreamState(audio, 1)
 end
 
+local function playPainSound()
+    if not ini.MARKER.PAIN_SOUND_ENABLED then
+        return
+    end
+    if not ini.MARKER.PAIN_SOUND_PATH or ini.MARKER.PAIN_SOUND_PATH == '' then
+        pushToast('Nenhum som de "levei tiro" escolhido', false)
+        return
+    end
 
+    if pain_audio then
+        pcall(setAudioStreamState, pain_audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, pain_audio) end
+        pain_audio = nil
+        collectgarbage()
+    end
 
-local _weapons = {}
-local function _initWeapon(id, name, dist, damage)
-   _weapons[id] = { id = id, name = name, dist = dist, damage = damage }
-end
-_initWeapon(22, "W1", 35.0, 8.25)
-_initWeapon(23, "W2", 35.0, 13.2)
-_initWeapon(24, "W3", 35.0, 46.200000762939)
-_initWeapon(25, "W4", 40.0, 30)
-_initWeapon(26, "W5", 35.0, 30)
-_initWeapon(27, "W6", 40.0, 30)
-_initWeapon(28, "W7", 35.0, 6.6)
-_initWeapon(29, "W8", 45.0, 8.25)
-_initWeapon(30, "W9", 70.0, 9.900024)
-_initWeapon(31, "W10", 90.0, 9.9000005722046)
-_initWeapon(32, "W11", 35.0, 6.6)
-_initWeapon(33, "W12", 95.0, 24.750001907349)
-_initWeapon(34, "W13", 320.0, 41)
-_initWeapon(38, "W14", 75.0, 46.2)
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.PAIN_SOUND_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar o som de dano', false)
+        return
+    end
 
-for _, w in pairs(_weapons) do
-   _config.guns[w.name] = { fov = 20, hit = 100 }
-end
-
-
-
-local _bones = {
-   { dots = { 31 }, name = "Cabeça" },
-   { dots = { 2, 41, 51 }, name = "Peito" },
-   { dots = { 33, 32, 34, 35 }, name = "Tronco" },
-   { dots = { 23, 22, 34, 25 }, name = "Braços" },
-   { dots = { 42, 43, 44 }, name = "Pernas" },
-   { dots = { 52, 53, 54 }, name = "Pés" },
-   { dots = { 8, 7 }, name = "Mãos" }
-}
-
-
-
-function _addLog(text, result)
-   table.insert(_log_data, (result and "{64FF64}" or "{FF6464}").."["..os.date("%H:%M:%S", os.time()).."] ["..(result and "DONE" or "SKIP").."] > "..text)
+    pain_audio = streamOrErr
+    setAudioStreamVolume(pain_audio, ini.MARKER.PAIN_SOUND_VOLUME / 100)
+    setAudioStreamState(pain_audio, 1)
 end
 
+-- ==============================
+-- MÚSICA DE FUNDO (loop)
+-- ==============================
 
-
-local _fov_slider, _hit_slider, _ind_fov_slider, _ind_hit_slider
-local _skin_buff, _pref_bone, _pref_bone_upd
-local _min_fake_dist, _max_fake_dist
-local _min_spread, _max_spread
-local _miss_after
-local _nick_buff
-
-local _global_dist_slider, _deagle_dist_slider, _m4_dist_slider
-
-local _esp_color_box
-local _esp_color_blocked
-local _esp_color_name
-local _esp_color_id
-local _esp_color_line
-
-local _puxar_dist_slider
-local _puxar_cmd_buffer
-
-local _last_key_state = {}
-
-
-
-function _getCamMode()
-   local aimptr = allocateMemory(31)
-   local _, pid = sampGetPlayerIdByCharHandle(PLAYER_PED)
-   sampStorePlayerAimData(pid, aimptr)
-   local mode = memory.getuint8(aimptr, 0)
-   freeMemory(aimptr)
-   return mode
+local function stopMusic()
+    if music_audio then
+        pcall(setAudioStreamState, music_audio, 0)
+        if releaseAudioStream then pcall(releaseAudioStream, music_audio) end
+        music_audio = nil
+        collectgarbage()
+    end
 end
 
-function _getBodyPart(id, handle)
-   local pedptr = getCharPointer(handle)
-   local vec = ffi.new("float[3]")
-   getBonePosition(ffi.cast("void*", pedptr), vec, id, true)
-   return vector3d(vec[0], vec[1], vec[2])
+local function playMusic()
+    stopMusic()
+    if not ini.MARKER.MUSIC_ENABLED then
+        return
+    end
+    if not ini.MARKER.MUSIC_PATH or ini.MARKER.MUSIC_PATH == '' then
+        pushToast('Nenhuma musica escolhida ainda', false)
+        return
+    end
+
+    local ok, streamOrErr = pcall(loadAudioStream, ini.MARKER.MUSIC_PATH)
+    if not ok or not streamOrErr then
+        pushToast('Nao consegui carregar a musica', false)
+        return
+    end
+
+    music_audio = streamOrErr
+    setAudioStreamVolume(music_audio, ini.MARKER.MUSIC_VOLUME / 100)
+    setAudioStreamState(music_audio, 1)
 end
 
-function _getSightPos()
-   if getCurrentCharWeapon(PLAYER_PED) == 34 then
-      local x, y = getScreenResolution()
-      return _vector2d(x/2, y/2)
-   else
-      return _vector2d(convertGameScreenCoordsToWindowScreenCoords(339.1, 179.1))
-   end
+local function triggerHitmarker()
+    pickHitImage()
+    showUntil = os.clock() + (ini.MARKER.DURATION / 1000)
+    playHitSound()
 end
-
-function _getWeapon()
-   return _weapons[getCurrentCharWeapon(PLAYER_PED)]
-end
-
-function _getRandomBone()
-   local temp = {}
-   for key, bone in ipairs(_config.bones) do
-      if bone then table.insert(temp, key) end
-   end
-   return (#temp > 0 and temp[math.random(1, #temp)] or _bones[math.random(1, #_bones)])
-end
-
-function _isTableHasValue(t, v)
-   for _, val in ipairs(t) do
-      if val == v then return true end
-   end
-   return false
-end
-
-function _tryInsert(t, v)
-   if not _isTableHasValue(t, v) then
-      table.insert(t, v)
-   end
-end
-
-function _updateIP()
-   if not _ignored_skins then _ignored_skins = {} end
-   if not _ignored_nicks then _ignored_nicks = {} end
-end
-
-function _writeWallshot()
-   for _, addr in ipairs({ 0x00740701, 0x00740703, 0x00740709, 0x00740B49, 0x00740B4B, 0x00740B51, 0x0073620D, 0x0073620F, 0x00736215 }) do
-      memory.write(addr, _config.wallshot and 0 or 1, 1, true)
-   end
-end
-
-function _writeInfRun(state)
-   setPlayerNeverGetsTired(PLAYER_HANDLE, state)
-end
-
-function _vector2d(x, y) return { x = x, y = y } end
-function _randomFloat(low, great) return low + math.random() * (great - low) end
-
-
-
-function _rgbToArgb(ptr, alpha)
-   if not ptr then return 0xFFFFFFFF end
-   local r = math.floor((ptr[0] or 1.0) * 255)
-   local g = math.floor((ptr[1] or 1.0) * 255)
-   local b = math.floor((ptr[2] or 1.0) * 255)
-   local a = math.floor((alpha or 1.0) * 255)
-   return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
-end
-
-function _rgbToImVec4(ptr)
-   if not ptr then return imgui.ImVec4(1, 1, 1, 1) end
-   return imgui.ImVec4(ptr[0], ptr[1], ptr[2], 1.0)
-end
-
-
-
-function _checkbox(text, key)
-   local ptr = ffi.new("bool[1]", _config[key])
-   imgui.Checkbox(text, ptr)
-   _config[key] = ptr[0]
-end
-
-
-
-function _colorButton(id, colorPtr)
-   imgui.PushStyleColor(imgui.Col.Button, _rgbToImVec4(colorPtr))
-   imgui.PushStyleColor(imgui.Col.ButtonHovered, _rgbToImVec4(colorPtr))
-   imgui.PushStyleColor(imgui.Col.ButtonActive, _rgbToImVec4(colorPtr))
-
-   local clicked = false
-   if imgui.Button("X##"..id, imgui.ImVec2(24, 20)) then
-      clicked = true
-   end
-
-   imgui.PopStyleColor(3)
-   return clicked
-end
-
-
-
-function TextColoredRGB(text)
-   local explode_argb = function(argb)
-      local a = bit.band(bit.rshift(argb, 24), 0xFF)
-      local r = bit.band(bit.rshift(argb, 16), 0xFF)
-      local g = bit.band(bit.rshift(argb, 8), 0xFF)
-      local b = bit.band(argb, 0xFF)
-      return a, r, g, b
-   end
-
-   local getcolor = function(color)
-      local color = type(color) == "string" and tonumber(color, 16) or color
-      if type(color) ~= "number" then return nil end
-      local r, g, b, a = explode_argb(color)
-      return imgui.ImVec4(r / 255, g / 255, b / 255, a / 255)
-   end
-
-   local render_text = function(text_)
-      for w in text_:gmatch("[^\r\n]+") do
-         local parts, colors_, m = {}, {}, 1
-         w = w:gsub("{(......)}", "{%1FF}")
-         while w:find("{........}") do
-            local n, k = w:find("{........}")
-            local color = getcolor(w:sub(n + 1, k - 1))
-            if color then
-               parts[#parts], parts[#parts + 1] = w:sub(m, n - 1), w:sub(k + 1, #w)
-               colors_[#colors_ + 1] = color
-               m = n
-            end
-            w = w:sub(1, n - 1) .. w:sub(k + 1, #w)
-         end
-         if parts[0] then
-            for i = 0, #parts do
-               imgui.TextColored(colors_[i] or imgui.ImVec4(1, 1, 1, 1), parts[i])
-               imgui.SameLine(nil, 0)
-            end
-            imgui.NewLine()
-         else
-            imgui.Text(w)
-         end
-      end
-   end
-   render_text(text)
-end
-
-
-
-function _captureKey()
-   if not _binding then return end
-   for key = 1, 255 do
-      local isDown = imgui.IsKeyDown(key)
-      local wasDown = _last_key_state[key] or false
-      if isDown and not wasDown then
-         if key == 27 then
-            _binding = nil
-         elseif key == 8 then
-            _config[_binding.key] = 0
-            _binding = nil
-         else
-            _config[_binding.key] = key
-            _binding = nil
-         end
-      end
-      _last_key_state[key] = isDown
-   end
-end
-
-
-
-function drawESP()
-   if not _config.esp_active then return end
-
-   local pPosX, pPosY, pPosZ = getCharCoordinates(PLAYER_PED)
-
-   for i = 0, sampGetMaxPlayerId() do
-      if sampIsPlayerConnected(i) then
-         local result, ped = sampGetCharHandleBySampPlayerId(i)
-         if result and ped ~= PLAYER_PED and doesCharExist(ped) and not isCharDead(ped) then
-            local posX, posY, posZ = getCharCoordinates(ped)
-            local distance = getDistanceBetweenCoords3d(posX, posY, posZ, pPosX, pPosY, pPosZ)
-            if distance <= _config.globalDistance and isCharOnScreen(ped) then
-               local wPosX, wPosY = convert3DCoordsToScreen(posX, posY, posZ)
-               if wPosX and wPosY then
-                  local player_name = sampGetPlayerNickname(i)
-
-                  local skin = nil
-                  pcall(function() skin = getCharModel(ped) end)
-
-                  local is_blocked = false
-                  if skin and _isTableHasValue(_ignored_skins, skin) then is_blocked = true end
-                  if player_name and _isTableHasValue(_ignored_nicks, player_name) then is_blocked = true end
-
-                  local boxColor
-                  if is_blocked then
-                     boxColor = _rgbToArgb(_esp_color_blocked, 1.0)
-                  else
-                     boxColor = _rgbToArgb(_esp_color_box, 1.0)
-                  end
-
-                  if _config.esp_box then
-                     local boxW   = 60
-                     local boxH   = 95
-                     local left   = wPosX - boxW / 2
-                     local right  = wPosX + boxW / 2
-                     local top    = wPosY - boxH / 2 - 15
-                     local bottom = wPosY + boxH / 2 - 15
-
-                     local cornerLen = 12
-                     local thickness = 1.5
-
-                     renderDrawLine(left, top, left + cornerLen, top, thickness, boxColor)
-                     renderDrawLine(left, top, left, top + cornerLen, thickness, boxColor)
-                     renderDrawLine(right, top, right - cornerLen, top, thickness, boxColor)
-                     renderDrawLine(right, top, right, top + cornerLen, thickness, boxColor)
-                     renderDrawLine(left, bottom, left + cornerLen, bottom, thickness, boxColor)
-                     renderDrawLine(left, bottom, left, bottom - cornerLen, thickness, boxColor)
-                     renderDrawLine(right, bottom, right - cornerLen, bottom, thickness, boxColor)
-                     renderDrawLine(right, bottom, right, bottom - cornerLen, thickness, boxColor)
-                  end
-
-                  if _config.esp_skin_id and skin then
-                     pcall(function()
-                        renderFontDrawText(font, "ID: "..tostring(skin), wPosX - 20, wPosY - 78, _rgbToArgb(_esp_color_id, 1.0))
-                     end)
-                  end
-
-                  if _config.esp_names and player_name then
-                     local nameColor = is_blocked and boxColor or _rgbToArgb(_esp_color_name, 1.0)
-                     renderFontDrawText(font, player_name, wPosX - (#player_name * 3), wPosY - 65, nameColor)
-                  end
-
-                  if _config.esp_lines then
-                     local screen_w, screen_h = getScreenResolution()
-                     local lineColor = is_blocked and boxColor or _rgbToArgb(_esp_color_line, 0.56)
-                     renderDrawLine(screen_w/2, screen_h, wPosX, wPosY, 1, lineColor)
-                  end
-               end
-            end
-         end
-      end
-   end
-end
-
-
-
-imgui.OnInitialize(function()
-   local style = imgui.GetStyle()
-   local colors = style.Colors
-   local clr = imgui.Col
-   local ImVec4 = imgui.ImVec4
-
-   style.WindowRounding    = 8.0
-   style.FrameRounding     = 4.0
-   style.GrabRounding      = 4.0
-   style.ScrollbarRounding = 6.0
-   style.WindowPadding     = imgui.ImVec2(10, 10)
-   style.FramePadding      = imgui.ImVec2(6, 4)
-   style.ItemSpacing       = imgui.ImVec2(8, 6)
-
-   colors[clr.WindowBg]             = ImVec4(0.06, 0.06, 0.09, 0.97)
-   colors[clr.TitleBg]              = ImVec4(0.08, 0.08, 0.12, 1.00)
-   colors[clr.TitleBgActive]        = ImVec4(0.12, 0.10, 0.20, 1.00)
-   colors[clr.MenuBarBg]            = ImVec4(0.10, 0.10, 0.15, 1.00)
-   colors[clr.ScrollbarBg]          = ImVec4(0.06, 0.06, 0.09, 0.60)
-   colors[clr.ScrollbarGrab]        = ImVec4(0.35, 0.30, 0.55, 0.80)
-   colors[clr.ScrollbarGrabHovered] = ImVec4(0.45, 0.38, 0.70, 0.90)
-   colors[clr.ScrollbarGrabActive]  = ImVec4(0.55, 0.45, 0.85, 1.00)
-   colors[clr.CheckMark]            = ImVec4(0.65, 0.50, 0.95, 1.00)
-   colors[clr.Button]               = ImVec4(0.16, 0.14, 0.22, 0.80)
-   colors[clr.ButtonHovered]        = ImVec4(0.28, 0.22, 0.45, 1.00)
-   colors[clr.ButtonActive]         = ImVec4(0.38, 0.30, 0.60, 1.00)
-   colors[clr.Header]               = ImVec4(0.20, 0.16, 0.32, 0.80)
-   colors[clr.HeaderHovered]        = ImVec4(0.32, 0.24, 0.50, 0.90)
-   colors[clr.HeaderActive]         = ImVec4(0.42, 0.32, 0.65, 1.00)
-   colors[clr.FrameBg]              = ImVec4(0.10, 0.10, 0.14, 0.90)
-   colors[clr.FrameBgHovered]       = ImVec4(0.16, 0.14, 0.24, 1.00)
-   colors[clr.FrameBgActive]        = ImVec4(0.20, 0.16, 0.30, 1.00)
-   colors[clr.SliderGrab]           = ImVec4(0.55, 0.40, 0.90, 1.00)
-   colors[clr.SliderGrabActive]     = ImVec4(0.70, 0.55, 1.00, 1.00)
-   colors[clr.Separator]            = ImVec4(0.25, 0.20, 0.40, 0.80)
-   colors[clr.Text]                 = ImVec4(0.85, 0.85, 0.90, 1.00)
-end)
-
-
 
 function main()
-   if not isSampLoaded() or not isSampfuncsLoaded() then return end
-   repeat wait(100) until isSampAvailable()
+    repeat wait(100) until isSampAvailable()
 
-   _max_fake_dist    = imgui.new.int(_config.maxfaketargetdist)
-   _fov_slider       = imgui.new.float(_config.fov)
-   _hit_slider       = imgui.new.float(_config.hit)
-   _ind_fov_slider   = imgui.new.float(0.0)
-   _skin_buff        = imgui.new.int(0)
-   _pref_bone        = imgui.new.int(_getRandomBone())
-   _pref_bone_upd    = imgui.new.int(_config.preferboneupd)
-   _min_fake_dist    = imgui.new.int(_config.minfakeaimdist)
-   _max_fake_dist    = imgui.new.int(_config.maxfakeaimdist)
-   _min_spread       = imgui.new.float(_config.minspread)
-   _max_spread       = imgui.new.float(_config.maxspread)
-   _ind_hit_slider   = imgui.new.float(0.0)
-   _miss_after       = imgui.new.int(_config.missafter)
-   _nick_buff        = imgui.new.char[64]("")
+    ensureDir('moonloader\\hitmarker')
+    ensureDir(IMAGES_DIR)
+    ensureDir(SOUNDS_DIR)
+    refreshFileLists()
 
-   _global_dist_slider = imgui.new.int(_config.globalDistance)
-   _deagle_dist_slider = imgui.new.int(_config.deagleDistance)
-   _m4_dist_slider     = imgui.new.int(_config.m4Distance)
+    local ok, msg = reloadImage()
+    if ok then
+        pushToast('Imagem carregada com sucesso', true)
+    else
+        pushToast('Falha ao carregar imagem inicial', false)
+    end
 
-   _esp_color_box     = imgui.new.float[3](1.0, 1.0, 1.0)
-   _esp_color_blocked = imgui.new.float[3](1.0, 0.0, 0.0)
-   _esp_color_name    = imgui.new.float[3](1.0, 1.0, 1.0)
-   _esp_color_id      = imgui.new.float[3](1.0, 0.0, 1.0)
-   _esp_color_line    = imgui.new.float[3](1.0, 1.0, 1.0)
+    local preloaded = preloadAllImages()
+    sampAddChatMessage('[Hitmarker] Coloque suas imagens (.png) em: ' .. getWorkingDirectory() .. '\\' .. IMAGES_DIR, 0xFF66CCFF)
+    sampAddChatMessage('[Hitmarker] Sons: usando a mesma pasta do GameFixer (' .. SOUNDS_DIR .. ')', 0xFF66CCFF)
+    sampAddChatMessage('[Hitmarker] Encontrei ' .. #sound_files .. ' som(ns) e ' .. #image_files .. ' imagem(ns) (' .. preloaded .. ' pre-carregadas).', 0xFF66CCFF)
 
-   _puxar_dist_slider = imgui.new.float(_puxar_max_distance)
-   _puxar_cmd_buffer  = imgui.new.char[64]("")
+    if ini.MARKER.MUSIC_ENABLED then
+        playMusic()
+    end
 
-   _updateIP()
-   _loadConfig()
+    sampRegisterChatCommand(MENU_COMMAND, function()
+        menu_open.v = not menu_open.v
+        imgui.Process = true
+    end)
+    sampAddChatMessage('[Hitmarker] Use /' .. MENU_COMMAND .. ' para configurar imagem, som, posicao, tamanho e duracao.', 0xFF66CCFF)
 
-   _puxar_dist_slider[0] = _puxar_max_distance
-   ffi.copy(_puxar_cmd_buffer, _puxar_server_cmd)
-
-   addEventHandler("onScriptTerminate", _scriptTerminateHandler)
-
-   _writeWallshot()
-   _writeInfRun(false)
-
-   -- Thread que atualiza a lista do puxar arma em background
-   lua_thread.create(function()
-      while true do
-         wait(500)
-         if _menu_tab == "Puxar Arma" and _window[0] then
-            _puxar_refreshList()
-         end
-      end
-   end)
-
-   local last_bone_upd = os.clock()
-
-   while true do
-      _legit = nil
-
-      if not sampIsChatInputActive() and not isSampfuncsConsoleActive() and not sampIsDialogActive() then
-         if isKeyJustPressed(_config.menubutton) and (_config.combobutton == 0 or isKeyDown(_config.combobutton)) then
-            if _window[0] then _saveConfig() end
-            _window[0] = not _window[0]
-         elseif not _config.lockactive and isKeyJustPressed(_config.statebutton) and (_config.combobutton == 0 or isKeyDown(_config.combobutton)) then
-            _state[0] = not _state[0]
-         elseif _config.lockactive then
-            _state[0] = isKeyDown(_config.lockbutton)
-         end
-      end
-
-      local weapon = _getWeapon()
-
-      if _state[0] and weapon then
-         if os.clock() - last_bone_upd >= _pref_bone_upd[0] and (isButtonPressed(player, 0) or isButtonPressed(player, 1)) then
-            last_bone_upd = os.clock()
-            _pref_bone[0] = _getRandomBone()
-         end
-
-         local sight_2d = _getSightPos()
-         local sight_3d = vector3d(convertScreenCoordsToWorld3D(sight_2d.x, sight_2d.y, 1))
-         local tdist = (_config.indivfov and _config.guns[weapon.name].fov or _config.fov) * 10
-
-         if _config.debug then
-            renderDrawPolygon(sight_2d.x, sight_2d.y, tdist * 2, tdist * 2, 50, 0, 0x2000ff00)
-         end
-
-         local temp_bones = {}
-         for _, dot in ipairs(_bones[_pref_bone[0]].dots) do
-            table.insert(temp_bones, dot)
-         end
-         if _last_bone and not _isTableHasValue(temp_bones, _last_bone) then
-            table.insert(temp_bones, _last_bone)
-         end
-         for k, bone in ipairs(_bones) do
-            if k ~= _pref_bone[0] then
-               for _, dot in ipairs(bone.dots) do
-                  table.insert(temp_bones, dot)
-               end
+    addEventHandler('onWindowMessage', function(msg, wparam, lparam)
+        if msg == wm.WM_KEYDOWN then
+            if binding then
+                if wparam ~= vkeys.VK_ESCAPE then
+                    ini.MARKER.TESTKEY = wparam
+                    saveConfig()
+                    pushToast('Tecla de teste atualizada', true)
+                end
+                binding = false
+                consumeWindowMessage()
             end
-         end
+        end
+    end)
 
-         local my_color
-         if _config.ignoremyclist then
-            my_color = sampGetPlayerColor(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED)))
-         end
+    while true do
+        wait(0)
+        local typing = sampIsChatInputActive() or isSampfuncsConsoleActive() or sampIsDialogActive()
+        if ini.MARKER.TEST_ENABLED and not binding and not menu_open.v and not typing and isKeyJustPressed(ini.MARKER.TESTKEY) then
+            triggerHitmarker()
+        end
 
-         for _, ped in ipairs(getAllChars()) do
-            if ped ~= PLAYER_PED and isCharOnScreen(ped) then
-               local result, id = sampGetPlayerIdByCharHandle(ped)
-               if result then
-                  local skip = false
-                  if _config.ignoremyclist and my_color == sampGetPlayerColor(id) then skip = true end
-                  if not skip and (_config.ignorebynick and _isTableHasValue(_ignored_nicks, sampGetPlayerNickname(id)) or _config.ignorebyskin and _isTableHasValue(_ignored_skins, getCharModel(ped))) then skip = true end
+        if ini.MARKER.MUSIC_ENABLED and music_audio and getAudioStreamState(music_audio) ~= 1 then
+            pcall(setAudioStreamPos, music_audio, 0)
+            setAudioStreamState(music_audio, 1)
+        end
 
-                  if not skip then
-                     for _, bone in ipairs(temp_bones) do
-                        local peds_bone = _getBodyPart(bone, ped)
-                        local bone_2d = _vector2d(convert3DCoordsToScreen(peds_bone:get()))
-                        local dist_sight = getDistanceBetweenCoords2d(bone_2d.x, bone_2d.y, sight_2d.x, sight_2d.y)
-                        local dist = getDistanceBetweenCoords3d(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone:get())
-                        if dist_sight < tdist and dist < weapon.dist and (not _legit or _legit.dist_sight > dist_sight) and not isCharDead(ped) and not sampIsPlayerPaused(id) and isLineOfSightClear(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone.x, peds_bone.y, peds_bone.z, not _config.ignoreobj, not _config.ignoreveh, false, not _config.ignoreobj, false) then
-                           _legit = { dist = dist, dist_sight = dist_sight, bone_num = bone, bone = peds_bone, ped = ped, id = id }
-                           break
-                        end
-                     end
-                  end
-               end
+        local now = os.clock()
+        for i = #toasts, 1, -1 do
+            if toasts[i].expire < now then
+                table.remove(toasts, i)
             end
-         end
-
-         if _legit then
-            _last_bone = _legit.bone_num
-            if _config.debug then
-               local tar_2d = _vector2d(convert3DCoordsToScreen(_legit.bone:get()))
-               renderDrawLine(sight_2d.x, sight_2d.y, tar_2d.x, tar_2d.y, 1, -1)
-               renderDrawBox(tar_2d.x, tar_2d.y, 5, 5, 0xffff0000)
-               renderFontDrawText(font, math.floor(_legit.dist_sight), sight_2d.x + 20, sight_2d.y - 15, 0xFFFF0000)
-            end
-         end
-      end
-
-      drawESP()
-
-      wait(0)
-   end
+        end
+    end
 end
 
 
+function sampev.onServerMessage(color, text)
+    if DEBUG_LOG_MESSAGES then
+        sampAddChatMessage('[Hitmarker][DEBUG] ' .. text, 0xFFAAAAAA)
+    end
 
-local _menu_items = { "Main", "Config", "Control", "ESP", "Puxar Arma", "Extra" }
+    if not (text:find('DamageInformer') and text:find(' fez ')) then
+        return
+    end
+
+    if text:find(HIT_RECEIVED_PATTERN) then
+        playPainSound()
+    else
+        triggerHitmarker()
+    end
+end
 
 
+-- ============================================================
+-- PALETA DE CORES — tema profissional (preto + roxo)
+-- ============================================================
+local COL_BG_DARK       = imgui.ImVec4(0.07, 0.07, 0.09, 1.00)
+local COL_BG_PANEL      = imgui.ImVec4(0.10, 0.10, 0.13, 1.00)
+local COL_BG_CARD       = imgui.ImVec4(0.12, 0.12, 0.15, 1.00)
+local COL_BG_SIDEBAR    = imgui.ImVec4(0.08, 0.08, 0.10, 1.00)
+local COL_BG_HOVER      = imgui.ImVec4(0.16, 0.14, 0.20, 1.00)
 
-imgui.OnFrame(
-   function() return _window[0] or _log_window[0] end,
-   function()
-      _captureKey()
+local COL_PURPLE        = imgui.ImVec4(0.55, 0.28, 0.90, 1.00)
+local COL_PURPLE_HOVER  = imgui.ImVec4(0.65, 0.38, 1.00, 1.00)
+local COL_PURPLE_ACTIVE = imgui.ImVec4(0.72, 0.48, 1.00, 1.00)
+local COL_PURPLE_DIM    = imgui.ImVec4(0.28, 0.14, 0.42, 1.00)
+local COL_PURPLE_SOFT   = imgui.ImVec4(0.40, 0.22, 0.62, 1.00)
 
-      if _last_infrun_state ~= _config.infrun then
-         _last_infrun_state = _config.infrun
-         _writeInfRun(_config.infrun)
-      end
+local COL_TEXT          = imgui.ImVec4(0.93, 0.93, 0.96, 1.00)
+local COL_TEXT_MUTED    = imgui.ImVec4(0.55, 0.55, 0.62, 1.00)
+local COL_TEXT_OK       = imgui.ImVec4(0.38, 0.88, 0.55, 1.00)
+local COL_TEXT_BAD      = imgui.ImVec4(0.95, 0.40, 0.40, 1.00)
 
-      if _window[0] then
-         imgui.SetNextWindowPos(imgui.ImVec2(350.0, 300.0), imgui.Cond.FirstUseEver)
-         imgui.SetNextWindowSize(imgui.ImVec2(470.0, 400.0), imgui.Cond.FirstUseEver)
+local COL_TOGGLE_ON     = imgui.ImVec4(0.22, 0.68, 0.40, 1.00)
+local COL_TOGGLE_ON_H   = imgui.ImVec4(0.30, 0.78, 0.48, 1.00)
+local COL_TOGGLE_OFF    = imgui.ImVec4(0.28, 0.28, 0.32, 1.00)
+local COL_TOGGLE_OFF_H  = imgui.ImVec4(0.40, 0.40, 0.45, 1.00)
 
-         imgui.PushStyleColor(imgui.Col.TitleBg, imgui.ImVec4(0.10, 0.10, 0.14, 1.0))
-         imgui.PushStyleColor(imgui.Col.TitleBgActive, imgui.ImVec4(0.14, 0.10, 0.22, 1.0))
-         imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1.0, 1.0, 1.0, 1.0))
+local COL_BTN           = imgui.ImVec4(0.18, 0.16, 0.24, 1.00)
+local COL_BTN_HOVER     = imgui.ImVec4(0.26, 0.22, 0.34, 1.00)
+local COL_BTN_ACTIVE    = imgui.ImVec4(0.34, 0.20, 0.48, 1.00)
 
-         imgui.Begin("REAL BLACKLIST", _window, imgui.WindowFlags.MenuBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
+-- ============================================================
+-- HELPERS DE ANIMAÇÃO (leves, via os.clock)
+-- ============================================================
+local function pulse(speed, minA, maxA)
+    local t = os.clock() * (speed or 2.0)
+    local s = (math.sin(t) + 1.0) * 0.5
+    return minA + (maxA - minA) * s
+end
 
-         local draw_list = imgui.GetWindowDrawList()
-         local win_pos   = imgui.GetWindowPos()
-         local win_size  = imgui.GetWindowSize()
-         local text = "BYPASS"
-         local text_x = win_pos.x + win_size.x * 0.28
-         local text_y = win_pos.y + win_size.y * 0.45
-         draw_list:AddText(imgui.ImVec2(text_x, text_y), imgui.U32(1.0, 1.0, 1.0, 0.15), text)
+local function lerpColor(a, b, t)
+    return imgui.ImVec4(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+        a.w + (b.w - a.w) * t
+    )
+end
 
-         imgui.BeginMenuBar()
-            imgui.Checkbox("", _state)
-            TextColoredRGB((_state[0] or _config.lockactive) and "{00FF00}ON " or "{FF0000}OFF")
-            imgui.SameLine()
-            for _, v in ipairs(_menu_items) do
-               if imgui.Button(v) then
-                  _menu_tab = v
-               end
-               imgui.SameLine()
+-- ============================================================
+-- WIDGETS CUSTOMIZADOS (compatíveis com ImGui antigo)
+-- ============================================================
+
+-- Botão da sidebar: integrado, texto centralizado, ativo = roxo
+local function sidebarButton(label, tabId, width, height)
+    local active = current_tab == tabId
+    local w = width or 140
+    local h = height or 40
+
+    if active then
+        local glow = pulse(2.2, 0.0, 0.18)
+        local col = imgui.ImVec4(
+            COL_PURPLE.x + glow * 0.3,
+            COL_PURPLE.y + glow * 0.2,
+            COL_PURPLE.z,
+            1.0
+        )
+        imgui.PushStyleColor(imgui.Col.Button, col)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+    else
+        imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0, 0, 0, 0))
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BG_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_DIM)
+    end
+
+    -- centraliza o texto horizontalmente com espaços
+    local pad = math.floor((w - (#label * 7)) / 14)
+    if pad < 1 then pad = 1 end
+    local spaced = string.rep(" ", pad) .. label .. string.rep(" ", pad)
+
+    local clicked = imgui.Button(spaced .. "##sb" .. tabId, imgui.ImVec2(w, h))
+    imgui.PopStyleColor(3)
+
+    if clicked then
+        current_tab = tabId
+    end
+    return clicked
+end
+
+-- Toggle ON/OFF moderno
+local function toggleButton(label, value, id)
+    imgui.TextColored(COL_TEXT, label)
+    imgui.SameLine(imgui.GetWindowWidth() - 92)
+
+    local isOn = value.v
+    local txt = isOn and "  ON  " or " OFF "
+    local btnId = txt .. "##tgl" .. id
+
+    if isOn then
+        imgui.PushStyleColor(imgui.Col.Button, COL_TOGGLE_ON)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_TOGGLE_ON_H)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.18, 0.55, 0.32, 1.00))
+    else
+        imgui.PushStyleColor(imgui.Col.Button, COL_TOGGLE_OFF)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_TOGGLE_OFF_H)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.22, 0.22, 0.26, 1.00))
+    end
+
+    local clicked = imgui.Button(btnId, imgui.ImVec2(72, 26))
+    imgui.PopStyleColor(3)
+
+    if clicked then
+        value.v = not value.v
+        return true
+    end
+    return false
+end
+
+-- Botão primário (roxo)
+local function primaryButton(label, size)
+    local glow = pulse(1.8, 0.0, 0.12)
+    local col = imgui.ImVec4(
+        COL_PURPLE.x + glow,
+        COL_PURPLE.y + glow * 0.5,
+        COL_PURPLE.z,
+        1.0
+    )
+    imgui.PushStyleColor(imgui.Col.Button, col)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+    local clicked = imgui.Button(label, size or imgui.ImVec2(-1, 38))
+    imgui.PopStyleColor(3)
+    return clicked
+end
+
+-- Botão secundário (cinza com contraste)
+local function secondaryButton(label, size)
+    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+    local clicked = imgui.Button(label, size or imgui.ImVec2(-1, 34))
+    imgui.PopStyleColor(3)
+    return clicked
+end
+
+-- Buffers ImInt para edição direta dos números (criados sob demanda)
+local int_bufs = {}
+
+local function getIntBuf(id, value)
+    if not int_bufs[id] then
+        int_bufs[id] = imgui.ImInt(value)
+    end
+    return int_bufs[id]
+end
+
+-- Stepper de valor com campo editável (clica no número e digita)
+-- Layout:  [ - ]  [  45  ]  [ + ]
+local function valueStepper(label, value, id, minValue, maxValue, step)
+    imgui.TextColored(COL_TEXT_MUTED, label)
+    imgui.SameLine(200)
+
+    local buf = getIntBuf(id, value)
+
+    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+    imgui.PushStyleColor(imgui.Col.FrameBg, COL_BG_CARD)
+    imgui.PushStyleColor(imgui.Col.FrameBgHovered, COL_BG_HOVER)
+    imgui.PushStyleColor(imgui.Col.FrameBgActive, COL_PURPLE_DIM)
+
+    -- botão -
+    if imgui.Button(" - ##" .. id .. "d", imgui.ImVec2(32, 26)) then
+        value = math.max(minValue, value - step)
+        buf.v = value
+        saveConfig()
+        pushToast(label .. ': ' .. tostring(value), true)
+    end
+    imgui.SameLine()
+
+    -- campo editável: clica e digita (ex: -1, 20, 450)
+    imgui.PushItemWidth(72)
+    -- step/step_fast = 0 desativa as setinhas internas do InputInt
+    if imgui.InputInt("##" .. id .. "in", buf, 0, 0) then
+        local v = buf.v
+        if v < minValue then v = minValue end
+        if v > maxValue then v = maxValue end
+        buf.v = v
+        value = v
+        saveConfig()
+        -- sem toast a cada tecla para não poluir
+    end
+    imgui.PopItemWidth()
+    imgui.SameLine()
+
+    -- botão +
+    if imgui.Button(" + ##" .. id .. "i", imgui.ImVec2(32, 26)) then
+        value = math.min(maxValue, value + step)
+        buf.v = value
+        saveConfig()
+        pushToast(label .. ': ' .. tostring(value), true)
+    end
+
+    imgui.PopStyleColor(6)
+    return value
+end
+
+-- Título de seção
+local function sectionTitle(title, subtitle)
+    imgui.TextColored(COL_PURPLE_ACTIVE, title)
+    if subtitle then
+        imgui.TextColored(COL_TEXT_MUTED, subtitle)
+    end
+    imgui.Spacing()
+end
+
+-- Card visual (BeginChild simples, sem bordas pesadas)
+local function beginCard(id, height)
+    imgui.BeginChild(id, imgui.ImVec2(0, height), true)
+end
+
+local function endCard()
+    imgui.EndChild()
+end
+
+-- Lista de arquivos
+local function fileList(id, height, files, selectedPath, basePath, emptyText, onSelect)
+    imgui.BeginChild(id, imgui.ImVec2(0, height), true)
+    if #files == 0 then
+        imgui.TextColored(COL_TEXT_MUTED, emptyText)
+    else
+        for _, filename in ipairs(files) do
+            local selected = selectedPath == basePath .. filename
+            if selected then
+                imgui.PushStyleColor(imgui.Col.Header, COL_PURPLE_DIM)
+                imgui.PushStyleColor(imgui.Col.HeaderHovered, COL_PURPLE_SOFT)
+                imgui.PushStyleColor(imgui.Col.HeaderActive, COL_PURPLE)
             end
-         imgui.EndMenuBar()
-         imgui.Separator()
-         imgui.Indent(5)
+            if imgui.Selectable("  " .. filename .. "##" .. id .. filename, selected) then
+                onSelect(filename)
+            end
+            if selected then
+                imgui.PopStyleColor(3)
+            end
+        end
+    end
+    imgui.EndChild()
+end
 
-         if _menu_tab == "Main" then
-            _checkbox("Ignore objects", "ignoreobj")
-            _checkbox("Ignore vehicles", "ignoreveh")
-            imgui.NewLine()
+-- ============================================================
+-- INTERFACE
+-- ============================================================
+function imgui.OnDrawFrame()
+    if not menu_open.v and #toasts == 0 then
+        imgui.Process = false
+        return
+    end
 
-            imgui.PushItemWidth(150)
-            _checkbox("Fake target", "faketarget")
-            if _config.faketarget then
-               if imgui.SliderInt("Max dist##maxfaketargetdist", _max_fake_dist, 0, 200) then
-                  _config.maxfaketargetdist = _max_fake_dist[0]
-               end
+    if menu_open.v then
+        -- Tentativa segura de arredondar frames/botões (ImGui antigo pode não ter StyleVar)
+        local styleVarPushed = 0
+        pcall(function()
+            if imgui.StyleVar and imgui.StyleVar.FrameRounding then
+                imgui.PushStyleVar(imgui.StyleVar.FrameRounding, 6)
+                styleVarPushed = styleVarPushed + 1
+            end
+            if imgui.StyleVar and imgui.StyleVar.WindowRounding then
+                imgui.PushStyleVar(imgui.StyleVar.WindowRounding, 8)
+                styleVarPushed = styleVarPushed + 1
+            end
+        end)
+
+        -- Estilo global da janela (somente Col seguros)
+        imgui.PushStyleColor(imgui.Col.WindowBg, COL_BG_DARK)
+        imgui.PushStyleColor(imgui.Col.TitleBg, COL_BG_SIDEBAR)
+        imgui.PushStyleColor(imgui.Col.TitleBgActive, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+        imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+        imgui.PushStyleColor(imgui.Col.Header, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.HeaderHovered, COL_PURPLE_SOFT)
+        imgui.PushStyleColor(imgui.Col.HeaderActive, COL_PURPLE)
+        imgui.PushStyleColor(imgui.Col.CheckMark, COL_PURPLE)
+        imgui.PushStyleColor(imgui.Col.FrameBg, COL_BG_CARD)
+        imgui.PushStyleColor(imgui.Col.FrameBgHovered, COL_BG_HOVER)
+        imgui.PushStyleColor(imgui.Col.FrameBgActive, COL_PURPLE_DIM)
+        imgui.PushStyleColor(imgui.Col.Text, COL_TEXT)
+
+        imgui.SetNextWindowSize(imgui.ImVec2(820, 560), imgui.Cond.FirstUseEver)
+        imgui.SetNextWindowPos(imgui.ImVec2(sw / 2, sh / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
+
+        imgui.Begin("HITMARKER  //  CONTROL PANEL", menu_open,
+            imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
+
+        -- Cabeçalho
+        imgui.TextColored(COL_PURPLE_ACTIVE, "HITMARKER")
+        imgui.SameLine(130)
+        imgui.TextColored(COL_TEXT_MUTED, "Painel de Controle")
+        imgui.SameLine(680)
+        -- ONLINE com pulso leve
+        local onlineA = pulse(2.5, 0.70, 1.00)
+        imgui.TextColored(imgui.ImVec4(0.38, 0.88, 0.55, onlineA), "ONLINE")
+        imgui.Spacing()
+
+        -- ============================================================
+        -- SIDEBAR (integrada, sem caixa extra, sem divisórias pesadas)
+        -- ============================================================
+        imgui.BeginChild("##hm_sidebar", imgui.ImVec2(150, 470), false)
+
+        imgui.Spacing()
+        sidebarButton("VISUAL",   1, 140, 40)
+        imgui.Spacing()
+        sidebarButton("SONS",     2, 140, 40)
+        imgui.Spacing()
+        sidebarButton("MUSICA",   3, 140, 40)
+        imgui.Spacing()
+        sidebarButton("AVANCADO", 4, 140, 40)
+
+        imgui.Spacing()
+        imgui.Spacing()
+        imgui.TextColored(COL_TEXT_MUTED, "  ATALHOS")
+        imgui.TextColored(COL_TEXT, "  /hit")
+        imgui.TextColored(COL_TEXT_MUTED, "  abre o painel")
+        imgui.Spacing()
+        imgui.TextColored(COL_TEXT_MUTED, "  v1.7.0")
+
+        imgui.EndChild()
+
+        imgui.SameLine()
+
+        -- ============================================================
+        -- CONTEÚDO
+        -- ============================================================
+        imgui.BeginChild("##hm_content", imgui.ImVec2(630, 470), false)
+
+        ----------------------------------------------------------------
+        -- ABA 1: VISUAL
+        ----------------------------------------------------------------
+        if current_tab == 1 then
+            sectionTitle("VISUAL", "Aparencia, posicao e imagem do hitmarker")
+
+            -- Modo de imagem: fixa / aleatoria / sequencial
+            beginCard("##card_mode", 88)
+            imgui.TextColored(COL_TEXT_MUTED, "MODO DA IMAGEM A CADA ACERTO")
+            imgui.Spacing()
+
+            local mode = ini.MARKER.IMAGE_MODE or 'fixed'
+            local modes = {
+                { 'fixed',  'FIXA' },
+                { 'random', 'ALEATORIA' },
+                { 'cycle',  'SEQUENCIAL' },
+            }
+            for i, m in ipairs(modes) do
+                local active = mode == m[1]
+                if active then
+                    imgui.PushStyleColor(imgui.Col.Button, COL_PURPLE)
+                    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_PURPLE_HOVER)
+                    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_PURPLE_ACTIVE)
+                else
+                    imgui.PushStyleColor(imgui.Col.Button, COL_BTN)
+                    imgui.PushStyleColor(imgui.Col.ButtonHovered, COL_BTN_HOVER)
+                    imgui.PushStyleColor(imgui.Col.ButtonActive, COL_BTN_ACTIVE)
+                end
+                if imgui.Button(m[2] .. "##imgmode" .. i, imgui.ImVec2(120, 28)) then
+                    ini.MARKER.IMAGE_MODE = m[1]
+                    saveConfig()
+                    if m[1] ~= 'fixed' then
+                        local n = preloadAllImages()
+                        pushToast('Modo ' .. m[2] .. ' (' .. n .. ' imgs)', true)
+                    else
+                        reloadImage()
+                        pushToast('Modo FIXA', true)
+                    end
+                end
+                imgui.PopStyleColor(3)
+                if i < #modes then imgui.SameLine() end
             end
 
-            imgui.NewLine()
-            _checkbox("Cam bypass", "cumbypass")
-            _checkbox("Sync rotation", "syncrotation")
-            _checkbox("Sync aim", "syncaimz")
-
-            if _config.syncrotation or _config.syncaimz then
-               if imgui.SliderInt("##minfakeaimdist", _min_fake_dist, 0, 400) then
-                  _config.minfakeaimdist = _min_fake_dist[0]
-               end
-               imgui.SameLine()
-               imgui.Indent(152)
-               if imgui.SliderInt("##maxfakeaimdist", _max_fake_dist, 0, 400) then
-                  _config.maxfakeaimdist = _max_fake_dist[0]
-               end
-               imgui.Unindent(152)
-               imgui.Text("Min & Max distance")
-            end
-            imgui.PopItemWidth()
-
-            imgui.NewLine()
-            _checkbox("Individual Fov", "indivfov")
-
-            if _config.indivfov then
-               _last_weapon = _getWeapon() or _last_weapon
-               if _last_weapon then
-                  _ind_fov_slider[0] = _config.guns[_last_weapon.name].fov
-                  if imgui.SliderFloat("Fov##".._last_weapon.id, _ind_fov_slider, 0.0, 80.0) then
-                     _config.guns[_last_weapon.name].fov = _ind_fov_slider[0]
-                  end
-                  TextColoredRGB("{F59B14}Only for ".._last_weapon.name)
-               else
-                  imgui.NewLine()
-                  TextColoredRGB("{F59B14}Get any weapon")
-                  imgui.NewLine()
-               end
+            imgui.Spacing()
+            if mode == 'fixed' then
+                imgui.TextColored(COL_TEXT_MUTED, "Usa sempre a imagem selecionada abaixo.")
+            elseif mode == 'random' then
+                imgui.TextColored(COL_TEXT_OK, "Cada acerto sorteia uma PNG da pasta.")
             else
-               if imgui.SliderFloat("Fov##all", _fov_slider, 0.0, 80.00) then
-                  _config.fov = _fov_slider[0]
-               end
-               imgui.NewLine()
+                imgui.TextColored(COL_TEXT_OK, "Cada acerto avanca para a proxima PNG.")
             end
+            endCard()
 
-            if imgui.CollapsingHeader("Bones", 0) then
-               local even = false
-               for k, v in ipairs(_bones) do
-                  if even then imgui.SameLine(); imgui.Indent(150) end
-                  local ptr = ffi.new("bool[1]", _config.bones[k])
-                  imgui.Checkbox(_bones[k].name or "Bone"..k, ptr)
-                  _config.bones[k] = ptr[0]
-                  if even then imgui.Unindent(150) end
-                  even = not even
-               end
-               imgui.NewLine()
-               imgui.Separator()
-            end
+            imgui.Spacing()
 
-            imgui.NewLine()
-            _checkbox("Ignore my clist", "ignoremyclist")
-            _checkbox("Ignore by nick", "ignorebynick")
+            beginCard("##card_image", 160)
+            imgui.TextColored(COL_TEXT_MUTED, "IMAGEM DO ACERTO")
+            imgui.Spacing()
 
-            if _config.ignorebynick then
-               imgui.PushItemWidth(100)
-               imgui.InputText("Nick", _nick_buff, 64)
-               imgui.PopItemWidth()
-
-               local nick_str = ffi.string(_nick_buff)
-               if nick_str:len() ~= 0 then
-                  imgui.SameLine()
-                  if imgui.Button(nick_str, imgui.ImVec2(imgui.CalcTextSize(nick_str).x + 20, 20)) then
-                     _tryInsert(_ignored_nicks, nick_str)
-                  end
-                  local nick_lower = nick_str:lower()
-                  for id = 0, sampGetMaxPlayerId(false) do
-                     if sampIsPlayerConnected(id) then
-                        local nick = sampGetPlayerNickname(id)
-                        if nick:lower():find(nick_lower) then
-                           imgui.SameLine()
-                           local bs = nick.."["..id.."]"
-                           if imgui.Button(bs, imgui.ImVec2(imgui.CalcTextSize(bs).x + 20, 20)) then
-                              _tryInsert(_ignored_nicks, nick)
-                           end
-                           break
-                        end
-                     end
-                  end
-               end
-
-               for k, v in ipairs(_ignored_nicks) do
-                  if imgui.Button(tostring(v).."##"..k, imgui.ImVec2(160, 20)) then
-                     table.remove(_ignored_nicks, k)
-                  end
-               end
-               imgui.NewLine()
-               imgui.Separator()
-            end
-
-            _checkbox("Ignore by skin", "ignorebyskin")
-            if _config.ignorebyskin then
-               imgui.PushItemWidth(80)
-               imgui.InputInt(" ", _skin_buff)
-               imgui.PopItemWidth()
-               imgui.SameLine()
-               if imgui.Button("Add") then
-                  _tryInsert(_ignored_skins, _skin_buff[0])
-               end
-               imgui.NewLine()
-               local items_count = 1
-               for k, v in ipairs(_ignored_skins) do
-                  if imgui.Button(tostring(v), imgui.ImVec2(36, 20)) then
-                     table.remove(_ignored_skins, k)
-                  end
-                  if items_count % 4 > 0 then imgui.SameLine() end
-                  items_count = items_count + 1
-               end
-            end
-
-         elseif _menu_tab == "Config" then
-            local ptr_w = ffi.new("bool[1]", _config.wallshot)
-            if imgui.Checkbox("Wallshot", ptr_w) then
-               _config.wallshot = ptr_w[0]
-               _writeWallshot()
-            end
-
-            imgui.NewLine()
-            imgui.PushItemWidth(150)
-            if imgui.SliderFloat("##minspread", _min_spread, -0.15, 0) then
-               _config.minspread = _min_spread[0]
-            end
-            imgui.SameLine()
-            imgui.Indent(152)
-            if imgui.SliderFloat("##maxspread", _max_spread, 0, 0.15) then
-               _config.maxspread = _max_spread[0]
-            end
-            imgui.Unindent(152)
-            imgui.PopItemWidth()
-            imgui.Text("Min & Max spread")
-
-            imgui.NewLine()
-            _checkbox("Individual Hit", "indivhit")
-
-            if _config.indivhit then
-               _last_weapon = _getWeapon() or _last_weapon
-               if _last_weapon then
-                  _ind_hit_slider[0] = _config.guns[_last_weapon.name].hit
-                  if imgui.SliderFloat("Hit##".._last_weapon.id, _ind_hit_slider, 0.0, 100.0) then
-                     _config.guns[_last_weapon.name].hit = _ind_hit_slider[0]
-                  end
-                  TextColoredRGB("{F59B14}Only for ".._last_weapon.name)
-               else
-                  imgui.NewLine()
-                  TextColoredRGB("{F59B14}Get any weapon")
-               end
+            local currentName = ini.MARKER.IMAGE_PATH
+            if currentName and currentName ~= '' then
+                local nameOnly = currentName:match("([^\\/]+)$") or currentName
+                imgui.TextColored(COL_TEXT, "Selecionada (modo FIXA):  " .. nameOnly)
             else
-               if imgui.SliderFloat("Hit##all", _hit_slider, 0.0, 100.00) then
-                  _config.hit = _hit_slider[0]
-               end
-               imgui.NewLine()
+                imgui.TextColored(COL_TEXT_MUTED, "Nenhuma imagem selecionada")
+            end
+            imgui.TextColored(COL_TEXT_MUTED, string.format("Pre-carregadas: %d / %d", #image_order, #image_files))
+            imgui.Spacing()
+
+            fileList("##hm_image_list", 85, image_files, ini.MARKER.IMAGE_PATH, IMAGES_DIR,
+                "Nenhuma imagem PNG encontrada em hitmarker/images/",
+                function(filename)
+                    ini.MARKER.IMAGE_PATH = IMAGES_DIR .. filename
+                    saveConfig()
+                    local ok2, msg2 = reloadImage()
+                    last_load_status = { ok = ok2, msg = msg2 }
+                    pushToast(ok2 and ("Imagem: " .. filename) or "Falha ao carregar imagem", ok2)
+                end)
+            endCard()
+
+            if last_load_status and current_tab == 1 then
+                imgui.TextColored(last_load_status.ok and COL_TEXT_OK or COL_TEXT_BAD, last_load_status.msg)
             end
 
-            imgui.NewLine()
-            _checkbox("Serial misses", "serialmisses")
-            if _config.serialmisses then
-               if imgui.SliderInt("Miss after", _miss_after, 0, 100) then
-                  _config.missafter = _miss_after[0]
-               end
+            imgui.Spacing()
+
+            beginCard("##card_pos", 155)
+            imgui.TextColored(COL_TEXT_MUTED, "POSICAO  /  TAMANHO  /  DURACAO")
+            imgui.Spacing()
+            ini.MARKER.X = valueStepper("Posicao X", ini.MARKER.X, "x", -400, 400, 5)
+            ini.MARKER.Y = valueStepper("Posicao Y", ini.MARKER.Y, "y", -400, 400, 5)
+            ini.MARKER.SIZE = valueStepper("Tamanho", ini.MARKER.SIZE, "size", 8, 256, 4)
+            ini.MARKER.DURATION = valueStepper("Duracao (ms)", ini.MARKER.DURATION, "duration", 50, 2000, 50)
+            endCard()
+
+            imgui.Spacing()
+            if primaryButton("TESTAR HITMARKER", imgui.ImVec2(-1, 38)) then
+                triggerHitmarker()
+                pushToast('Hitmarker testado', true)
             end
 
-            imgui.NewLine()
-            _checkbox("From the hip", "fromthehip")
-            _checkbox("Infinite run", "infrun")
+        ----------------------------------------------------------------
+        -- ABA 2: SONS
+        ----------------------------------------------------------------
+        elseif current_tab == 2 then
+            sectionTitle("SONS", "Sons de acerto e de dano recebido")
 
-         elseif _menu_tab == "Control" then
-            local ptr_o = ffi.new("bool[1]", _config.onatstart)
-            imgui.Checkbox("Enabled at start", ptr_o)
-            _config.onatstart = ptr_o[0]
+            beginCard("##card_hit_sound", 205)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "QUANDO VOCE ACERTA")
+            imgui.Spacing()
 
-            _checkbox("Lock activation", "lockactive")
-            imgui.NewLine()
-
-            for k, v in pairs({ lockbutton = "Lock", menubutton = "Menu", statebutton = "State", combobutton = "Combo" }) do
-               imgui.Text(v)
-               imgui.SameLine()
-               imgui.Indent(50)
-               if _binding and _binding.key == k then
-                  imgui.Button("???", imgui.ImVec2(100, 20))
-               else
-                  local key = vkeys.id_to_name(_config[k]) or ""
-                  if imgui.Button(key.."##"..k, imgui.ImVec2(100, 20)) then
-                     _binding = { key = k }
-                  end
-               end
-               imgui.Unindent(50)
+            if toggleButton("Som de acerto", sound_enabled, "sound_enabled") then
+                ini.MARKER.SOUND_ENABLED = sound_enabled.v
+                saveConfig()
+                pushToast(sound_enabled.v and "Som de acerto: ON" or "Som de acerto: OFF", true)
             end
 
-            if _binding then
-               TextColoredRGB("{F59B14}Escolha uma tecla... (ESC = cancelar)")
+            if ini.MARKER.SOUND_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.SOUND_VOLUME = valueStepper("Volume", ini.MARKER.SOUND_VOLUME, "soundvol", 0, 100, 5)
+            end
+
+            imgui.Spacing()
+            fileList("##hm_sound_list", 85, sound_files, ini.MARKER.SOUND_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.SOUND_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    last_load_status = { ok = true, msg = "Som de acerto: " .. filename }
+                    playHitSound()
+                    pushToast("Som de acerto: " .. filename, true)
+                end)
+            endCard()
+
+            imgui.Spacing()
+            if secondaryButton("TESTAR SOM DE ACERTO", imgui.ImVec2(-1, 32)) then
+                playHitSound()
+            end
+
+            imgui.Spacing()
+            imgui.Spacing()
+
+            beginCard("##card_pain_sound", 205)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "QUANDO VOCE LEVA O TIRO")
+            imgui.Spacing()
+
+            if toggleButton("Som ao levar tiro", pain_sound_enabled, "pain_enabled") then
+                ini.MARKER.PAIN_SOUND_ENABLED = pain_sound_enabled.v
+                saveConfig()
+                pushToast(pain_sound_enabled.v and "Som de dano: ON" or "Som de dano: OFF", true)
+            end
+
+            if ini.MARKER.PAIN_SOUND_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.PAIN_SOUND_VOLUME = valueStepper("Volume", ini.MARKER.PAIN_SOUND_VOLUME, "painvol", 0, 100, 5)
+            end
+
+            imgui.Spacing()
+            fileList("##hm_pain_sound_list", 85, sound_files, ini.MARKER.PAIN_SOUND_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.PAIN_SOUND_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    last_load_status = { ok = true, msg = "Som ao levar tiro: " .. filename }
+                    playPainSound()
+                    pushToast("Som de dano: " .. filename, true)
+                end)
+            endCard()
+
+            imgui.Spacing()
+            if secondaryButton("TESTAR SOM AO LEVAR TIRO", imgui.ImVec2(-1, 32)) then
+                playPainSound()
+            end
+
+        ----------------------------------------------------------------
+        -- ABA 3: MÚSICA
+        ----------------------------------------------------------------
+        elseif current_tab == 3 then
+            sectionTitle("MUSICA", "Musica de fundo em loop continuo")
+
+            beginCard("##card_music", 115)
+            if toggleButton("Ativar musica de fundo", music_enabled, "music_enabled") then
+                ini.MARKER.MUSIC_ENABLED = music_enabled.v
+                saveConfig()
+                if ini.MARKER.MUSIC_ENABLED then
+                    playMusic()
+                    pushToast("Musica: ON", true)
+                else
+                    stopMusic()
+                    pushToast("Musica: OFF", true)
+                end
+            end
+
+            if ini.MARKER.MUSIC_ENABLED then
+                imgui.Spacing()
+                ini.MARKER.MUSIC_VOLUME = valueStepper("Volume", ini.MARKER.MUSIC_VOLUME, "musicvol", 0, 100, 5)
+                if music_audio then
+                    imgui.TextColored(COL_TEXT_OK, "  Reproduzindo agora")
+                end
             else
-               imgui.TextDisabled("Clique em um botão acima para trocar a tecla")
+                imgui.Spacing()
+                imgui.TextColored(COL_TEXT_MUTED, "  Musica desativada")
+            end
+            endCard()
+
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT_MUTED, "FAIXAS DISPONIVEIS")
+            imgui.Spacing()
+
+            fileList("##hm_music_list", 250, sound_files, ini.MARKER.MUSIC_PATH, SOUNDS_DIR,
+                "Nenhum WAV/MP3 encontrado.",
+                function(filename)
+                    ini.MARKER.MUSIC_PATH = SOUNDS_DIR .. filename
+                    saveConfig()
+                    if ini.MARKER.MUSIC_ENABLED then playMusic() end
+                    last_load_status = { ok = true, msg = "Musica escolhida: " .. filename }
+                    pushToast("Musica: " .. filename, true)
+                end)
+
+        ----------------------------------------------------------------
+        -- ABA 4: AVANÇADO
+        ----------------------------------------------------------------
+        elseif current_tab == 4 then
+            sectionTitle("AVANCADO", "Ferramentas e controles extras")
+
+            beginCard("##card_lists", 90)
+            imgui.TextColored(COL_TEXT_MUTED, "ARQUIVOS DETECTADOS")
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT, string.format("%d imagem(ns)   •   %d som(ns)", #image_files, #sound_files))
+            imgui.Spacing()
+            if secondaryButton("ATUALIZAR LISTAS DE ARQUIVOS", imgui.ImVec2(-1, 32)) then
+                refreshFileLists()
+                local n = preloadAllImages()
+                reloadImage()
+                pushToast("Listas atualizadas (" .. n .. " imgs)", true)
+            end
+            endCard()
+
+            imgui.Spacing()
+            imgui.Spacing()
+
+            beginCard("##card_testkey", 140)
+            imgui.TextColored(COL_PURPLE_ACTIVE, "TECLA DE TESTE")
+            imgui.Spacing()
+
+            if toggleButton("Ativar tecla de teste", test_enabled, "test_enabled") then
+                ini.MARKER.TEST_ENABLED = test_enabled.v
+                saveConfig()
+                pushToast(test_enabled.v and "Tecla de teste: ON" or "Tecla de teste: OFF", true)
             end
 
-         elseif _menu_tab == "ESP" then
-            _checkbox("ESP Active", "esp_active")
-            imgui.NewLine()
-            imgui.Separator()
-            imgui.NewLine()
+            imgui.Spacing()
+            imgui.TextColored(COL_TEXT_MUTED, "Tecla configurada")
+            local keyName = binding and "PRESSIONE UMA TECLA..." or
+                (vkeys.id_to_name(ini.MARKER.TESTKEY) or ("#" .. tostring(ini.MARKER.TESTKEY)))
 
-            _checkbox("Box", "esp_box")
-            imgui.SameLine()
-            if _colorButton("box", _esp_color_box) then
-               imgui.OpenPopup("color_box")
-            end
-            if imgui.BeginPopup("color_box") then
-               imgui.ColorEdit3("Box Color", _esp_color_box)
-               imgui.EndPopup()
+            if secondaryButton(keyName .. "##hm_testkey", imgui.ImVec2(-1, 34)) then
+                binding = true
             end
 
-            _checkbox("Names", "esp_names")
-            imgui.SameLine()
-            if _colorButton("names", _esp_color_name) then
-               imgui.OpenPopup("color_names")
+            if binding then
+                imgui.TextColored(imgui.ImVec4(1.0, 0.70, 0.30, 1.0), "Pressione uma tecla...  (ESC cancela)")
             end
-            if imgui.BeginPopup("color_names") then
-               imgui.ColorEdit3("Name Color", _esp_color_name)
-               imgui.EndPopup()
-            end
+            endCard()
 
-            _checkbox("Lines", "esp_lines")
-            imgui.SameLine()
-            if _colorButton("lines", _esp_color_line) then
-               imgui.OpenPopup("color_lines")
+            imgui.Spacing()
+            if primaryButton("TESTAR HITMARKER AGORA", imgui.ImVec2(-1, 40)) then
+                triggerHitmarker()
+                pushToast("Hitmarker testado", true)
             end
-            if imgui.BeginPopup("color_lines") then
-               imgui.ColorEdit3("Line Color", _esp_color_line)
-               imgui.EndPopup()
-            end
+        end
 
-            _checkbox("Show Skin ID", "esp_skin_id")
-            imgui.SameLine()
-            if _colorButton("id", _esp_color_id) then
-               imgui.OpenPopup("color_id")
-            end
-            if imgui.BeginPopup("color_id") then
-               imgui.ColorEdit3("ID Color", _esp_color_id)
-               imgui.EndPopup()
-            end
+        imgui.EndChild() -- ##hm_content
+        imgui.End()
 
-            imgui.Text("Blocked Color")
-            imgui.SameLine()
-            if _colorButton("blocked", _esp_color_blocked) then
-               imgui.OpenPopup("color_blocked")
-            end
-            if imgui.BeginPopup("color_blocked") then
-               imgui.ColorEdit3("Blocked Color", _esp_color_blocked)
-               imgui.EndPopup()
+        imgui.PopStyleColor(14)
+        if styleVarPushed > 0 then
+            pcall(function() imgui.PopStyleVar(styleVarPushed) end)
+        end
+    end -- if menu_open.v
+
+    -- ============================================================
+    -- TOASTS
+    -- ============================================================
+    if #toasts > 0 then
+        local toastY = 20
+        for i, t in ipairs(toasts) do
+            local alpha = 1.0
+            local remaining = t.expire - os.clock()
+            if remaining < 0.6 then
+                alpha = math.max(0.0, remaining / 0.6)
             end
 
-            imgui.NewLine()
-            imgui.Separator()
-            imgui.NewLine()
+            local bgCol = t.ok
+                and imgui.ImVec4(0.10, 0.18, 0.14, 0.92 * alpha)
+                or  imgui.ImVec4(0.26, 0.10, 0.12, 0.92 * alpha)
 
-            imgui.PushItemWidth(200)
-            if imgui.SliderInt("Global Distance", _global_dist_slider, 50, 1000) then
-               _config.globalDistance = _global_dist_slider[0]
-            end
-            if imgui.SliderInt("Deagle Distance", _deagle_dist_slider, 5, 200) then
-               _config.deagleDistance = _deagle_dist_slider[0]
-            end
-            if imgui.SliderInt("M4 Distance", _m4_dist_slider, 5, 300) then
-               _config.m4Distance = _m4_dist_slider[0]
-            end
-            imgui.PopItemWidth()
+            local textCol = t.ok
+                and imgui.ImVec4(0.70, 1.00, 0.78, alpha)
+                or  imgui.ImVec4(1.00, 0.70, 0.72, alpha)
 
-         elseif _menu_tab == "Puxar Arma" then
-            imgui.TextColored(imgui.ImVec4(0.55, 0.40, 0.90, 1.0), "PUXAR ARMA")
-            imgui.Separator()
-            imgui.NewLine()
+            imgui.SetNextWindowPos(imgui.ImVec2(sw - 320, toastY), imgui.Cond.Always)
+            imgui.SetNextWindowSize(imgui.ImVec2(300, 48), imgui.Cond.Always)
 
-            imgui.PushItemWidth(200)
-            if imgui.SliderFloat("Distancia maxima", _puxar_dist_slider, 5.0, 200.0) then
-               _puxar_max_distance = _puxar_dist_slider[0]
-            end
-            imgui.PopItemWidth()
+            imgui.PushStyleColor(imgui.Col.WindowBg, bgCol)
+            imgui.PushStyleColor(imgui.Col.Text, textCol)
 
-            imgui.NewLine()
+            local flags = imgui.WindowFlags.NoTitleBar
+                + imgui.WindowFlags.NoResize
+                + imgui.WindowFlags.NoMove
+                + imgui.WindowFlags.NoScrollbar
+                + imgui.WindowFlags.NoCollapse
 
-            imgui.Text("Comando do servidor:")
-            imgui.PushItemWidth(200)
-            imgui.InputText("##puxar_cmd", _puxar_cmd_buffer, 64)
-            imgui.PopItemWidth()
+            imgui.Begin("##toast_" .. i, nil, flags)
+            local prefix = t.ok and "[OK]  " or "[X]  "
+            imgui.Text(prefix .. t.text)
+            imgui.End()
 
-            local cmd_str = ffi.string(_puxar_cmd_buffer)
-            if cmd_str:len() > 0 then
-               _puxar_server_cmd = cmd_str
-            end
-
-            imgui.NewLine()
-            imgui.Separator()
-
-            if sampIsLocalPlayerSpawned() then
-               TextColoredRGB("{F59B14}Armas num raio de "..string.format("%.0f", _puxar_max_distance).."m: {FFFFFF}"..#_puxar_list)
-            else
-               TextColoredRGB("{FF5555}Voce nao esta spawnado")
-            end
-
-            imgui.NewLine()
-
-            -- Botão de atualizar
-            if imgui.Button("Atualizar lista", imgui.ImVec2(120, 22)) then
-               _puxar_refreshList()
-            end
-            imgui.SameLine()
-            if imgui.Button("Puxar mais proxima", imgui.ImVec2(150, 22)) then
-               _puxar_main()
-            end
-
-            imgui.NewLine()
-            imgui.Text("Status: ")
-            imgui.SameLine()
-            imgui.TextColored(imgui.ImVec4(
-               bit.band(bit.rshift(_puxar_status_color, 16), 0xFF) / 255,
-               bit.band(bit.rshift(_puxar_status_color, 8), 0xFF) / 255,
-               bit.band(_puxar_status_color, 0xFF) / 255,
-               1.0
-            ), _puxar_status)
-
-            imgui.NewLine()
-            imgui.Separator()
-            imgui.NewLine()
-
-            TextColoredRGB("{F59B14}Armas detectadas:")
-
-            imgui.BeginChild("weapon_list", imgui.ImVec2(0, 180), true)
-               if #_puxar_list == 0 then
-                  imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), "Nenhuma arma por perto...")
-               else
-                  for i, entry in ipairs(_puxar_list) do
-                     imgui.Text(string.format("%s", entry.name))
-                     imgui.SameLine(140)
-                     imgui.TextColored(imgui.ImVec4(0.6, 0.6, 0.6, 1.0), string.format("%.1fm", entry.distance))
-                     imgui.SameLine(200)
-                     if not _puxar_busy then
-                        if imgui.Button("Pegar##"..i) then
-                           _puxar_executeFromList(entry)
-                        end
-                     else
-                        imgui.TextDisabled("...")
-                     end
-                  end
-               end
-            imgui.EndChild()
-
-         elseif _menu_tab == "Extra" then
-            imgui.BeginChild("Misc1", imgui.ImVec2(140, 220), false)
-               _checkbox("Debug", "debug")
-
-               if imgui.Button("Log window", imgui.ImVec2(120, 20)) then
-                  _log_window[0] = not _log_window[0]
-               end
-
-               if imgui.Button("Clear log", imgui.ImVec2(120, 20)) then
-                  _log_data = {}
-               end
-
-               if imgui.Button("Save Config", imgui.ImVec2(120, 20)) then
-                  _saveConfig()
-               end
-
-               if imgui.Button("Load Config", imgui.ImVec2(120, 20)) then
-                  _loadConfig()
-               end
-            imgui.EndChild()
-
-            imgui.SameLine()
-
-            imgui.BeginChild("Misc2", imgui.ImVec2(275, 220), false)
-               TextColoredRGB("v. "..VERSION)
-            imgui.EndChild()
-         end
-
-         imgui.End()
-
-         imgui.PopStyleColor(3)
-      end
-
-      if _log_window[0] then
-         local x, y = getCursorPos()
-         imgui.SetNextWindowPos(imgui.ImVec2(x - 150, y - 10), imgui.Cond.FirstUseEver)
-         imgui.SetNextWindowSize(imgui.ImVec2(550, 400), imgui.Cond.FirstUseEver)
-         imgui.Begin(os.date("%d %B %Y", os.time()), _log_window, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
-         for _, v in ipairs(_log_data) do
-            TextColoredRGB(v)
-         end
-         if #_log_data > _last_log_size then imgui.SetScrollHereY() end
-         _last_log_size = #_log_data
-         imgui.End()
-      end
-   end
-)
-
-
-
--- SAMPEV
-function sampev.onSendPlayerSync(data)
-   if not _state[0] then return end
-
-   local mode = _getCamMode()
-   if _legit and (mode == 53 or mode == 7 or mode == 55) then
-      _sendWeaponSync(_legit.id)
-   else
-      _sendWeaponSync(65535)
-   end
-
-   if not _legit then return end
-
-   local weapon = _getWeapon()
-   if not weapon then return end
-   if weapon.id == 24 or weapon.id == 26 or weapon.id == 28 or weapon.id == 32 then return end
-
-   if not isButtonPressed(player, 6) then mode = 4 end
-
-   if not _config.syncrotation or (mode ~= 53 and mode ~= 7) or _legit.dist < _min_fake_dist[0] or _legit.dist > _max_fake_dist[0] then
-      return
-   end
-
-   local my_bone = _getBodyPart(23, PLAYER_PED)
-   local a = getHeadingFromVector2d(_legit.bone.x - my_bone.x, _legit.bone.y - my_bone.y) * math.pi / 360.0
-   local c1, c2, c3 = math.cos(0), math.cos(a), math.cos(0)
-   local s1, s2, s3 = math.sin(0), math.sin(a), math.sin(0)
-
-   data.quaternion[0] = c1 * c2 * c3 - s1 * s2 * s3
-   data.quaternion[3] = -(c1 * s2 * c3 - s1 * c2 * s3)
+            imgui.PopStyleColor(2)
+            toastY = toastY + 56
+        end
+    end
 end
 
-function _sendWeaponSync(id)
-   if _last_target == id then return end
-   local weapon = _getWeapon()
-   if not weapon then return end
+-- Desenha o hitmarker na posição/tamanho configurados enquanto estiver ativo
+addEventHandler('onD3DPresent', function()
+    if texture and os.clock() < showUntil then
+        local size = ini.MARKER.SIZE
+        local x = sw / 2 - size / 2 + ini.MARKER.X
+        local y = sh / 2 - size / 2 + ini.MARKER.Y
+        renderDrawTexture(texture, x, y, size, size, 0.0, 0xFFFFFFFF)
+    end
+end)
 
-   local bs = raknetNewBitStream()
-   raknetBitStreamWriteInt8(bs, 204)
-   raknetBitStreamWriteInt16(bs, id)
-   raknetBitStreamWriteInt16(bs, 65535)
-   raknetBitStreamWriteInt8(bs, getWeapontypeSlot(weapon.id))
-   raknetBitStreamWriteInt8(bs, weapon.id)
-   raknetBitStreamWriteInt16(bs, getAmmoInCharWeapon(PLAYER_PED, weapon.id))
-   raknetSendBitStream(bs)
-   raknetDeleteBitStream(bs)
-
-   _last_target = id
-end
-
-function sampev.onSendAimSync(data)
-   if not _state[0] or not _legit or _legit.dist < _min_fake_dist[0] or _legit.dist > _max_fake_dist[0] then
-      return true
-   end
-
-   local my_bone = _getBodyPart(23, PLAYER_PED)
-   if _config.syncaimz then
-      local d = _vector2d(
-         getDistanceBetweenCoords3d(_legit.bone.x, _legit.bone.y, my_bone.z, my_bone:get()),
-         getDistanceBetweenCoords3d(my_bone.x, my_bone.y, _legit.bone.z, my_bone:get())
-      )
-      local aimZ = math.atan(math.abs(d.y/d.x))
-      data.aimZ = _legit.bone.z > my_bone.z and -aimZ or aimZ
-   end
-
-   if _config.cumbypass then
-      data.camFront = vector3d(0.0, 0.0, -0.1)
-      data.camPos = _legit.bone
-   end
-end
-
-function sampev.onSendWeaponsUpdate(player_target, actor_target, weapons)
-   if _config.faketarget and _legit and _config.maxfaketargetdist > _legit.dist then
-      _last_target = _legit.id
-      return { _legit.id, 65535, weapons }
-   end
-   if player_target == 65535 then _last_target = 65535 end
-end
-
-function sampev.onSendCameraTargetUpdate(object_id, vehicle_id, player_id, actor_id)
-   if _config.faketarget and _legit then
-      return { 65535, 65535, _legit.id, 65535 }
-   end
-end
-
-function sampev.onSendCommand(cmd)
-   if cmd == "/" .. _config.cmd then
-      if _window[0] then _saveConfig() end
-      _window[0] = not _window[0]
-      return false
-   end
-end
-
-function sampev.onSendBulletSync(data)
-   if not _state[0] or not _legit or data.targetType == 1 or not doesCharExist(_legit.ped) then
-      return true
-   end
-
-   local weapon = _getWeapon()
-   if not weapon then return true end
-
-   if not _config.fromthehip and not isCharInAnyCar(PLAYER_PED) and _getCamMode() == 4 then
-      if _config.debug then _addLog("Skipped from hip with "..weapon.name, false) end
-      return true
-   end
-
-   _shots = _shots + 1
-   local missrate = _config.indivhit and _config.guns[weapon.name].hit or _hit_slider[0]
-
-   if missrate < 100 then
-      local rand = math.random(1, 100)
-      if rand >= missrate then
-         if _config.debug then _addLog("Skipped by random", false) end
-         return true
-      end
-   end
-
-   if _config.serialmisses then
-      if _shots % (_miss_after[0] + 1) == 0 then
-         if _config.debug then _addLog("Serial miss", false) end
-         return true
-      end
-   end
-
-   local ped_coords = vector3d(getCharCoordinates(_legit.ped))
-   local my_coords = vector3d(getCharCoordinates(PLAYER_PED))
-
-   if _legit.dist > weapon.dist or isCharDead(_legit.ped) or sampIsPlayerPaused(_legit.id) then
-      if _config.debug then _addLog("Target invalid", false) end
-      return true
-   end
-
-   local rand = vector3d(
-      _randomFloat(_min_spread[0], _max_spread[0]),
-      _randomFloat(_min_spread[0], _max_spread[0]),
-      _randomFloat(_min_spread[0], _max_spread[0])
-   )
-
-   data.targetType = 1
-   data.targetId = _legit.id
-   data.target = ped_coords + rand
-   data.center = _legit.bone - ped_coords + rand
-
-   if _config.debug then
-      lua_thread.create(function()
-         local my_bone = _getBodyPart(26, PLAYER_PED)
-         local target = vector3d(data.target.x + data.center.x, data.target.y + data.center.y, data.target.z + data.center.z)
-         local time = os.clock()
-         while _config.debug and os.clock() - time < 10.0 do
-            if isPointOnScreen(my_bone.x, my_bone.y, my_bone.z, 0) and isPointOnScreen(target.x, target.y, target.z, 0) then
-               local my_bone_2d = _vector2d(convert3DCoordsToScreen(my_bone:get()))
-               local target_2d = _vector2d(convert3DCoordsToScreen(target:get()))
-               renderDrawLine(my_bone_2d.x, my_bone_2d.y, target_2d.x, target_2d.y, 2, bit.bor(0xFF0000, bit.lshift(255 - (os.clock() - time) * 25.5, 24)))
-               renderDrawPolygon(target_2d.x - 5, target_2d.y - 5, 10, 10, 20, 0, bit.bor(0x00FF00, bit.lshift(255 - (os.clock() - time) * 25.5, 24)))
-            end
-            wait(0)
-         end
-      end)
-   end
-
-   for bodypart, bone in ipairs(_bones) do
-      for _, dot in ipairs(bone.dots) do
-         if dot == _legit.bone_num then
-            lua_thread.create(function()
-               local id = _legit.id
-               wait(1)
-               sampSendGiveDamage(id, weapon.damage, weapon.id, bodypart + 2)
-               if _config.debug then _addLog("Sent damage to "..id, true) end
-            end)
-            return
-         end
-      end
-   end
-end
-
-function sampev.onSetPlayerPos()
-   if _puxar_busy then
-      pcall(freezeCharPosition, PLAYER_PED, false)
-      pcall(setCharVisible, PLAYER_PED, true)
-      if type(restoreCameraJumpcut) == "function" then
-         pcall(restoreCameraJumpcut)
-      end
-      _puxar_busy = false
-      _puxar_status = "Cancelado pelo servidor"
-      _puxar_status_color = 0xFFFFAA33
-   end
-end
-
-
-
--- HANDLERS
-function _scriptTerminateHandler(scr)
-   if _state then _state[0] = false end
-   _writeInfRun(false)
-   _saveConfig()
+-- Para todos os sons ao descarregar o script
+function onScriptTerminate(script)
+    if script == thisScript() then
+        stopMusic()
+        if audio then pcall(setAudioStreamState, audio, 0) end
+        if pain_audio then pcall(setAudioStreamState, pain_audio, 0) end
+    end
 end
