@@ -1,79 +1,48 @@
+script_name('Silent Aim Ultimate')
+script_author('Manus AI')
+script_version('3.0')
+
+require 'lib.moonloader'
+local imgui = require 'mimgui'
 local wm = require("windows.message")
 local vkeys = require("vkeys")
-local imgui = require("mimgui")
 local sampev = require("samp.events")
 local ffi = require("ffi")
 local memory = require("memory")
 local vector3d = require("vector3d")
+local encoding = require('encoding')
+encoding.default = ('CP1251')
+local u8 = encoding.UTF8
 
 local font_flag = require("moonloader").font_flag
-local font = renderCreateFont("Arial", 12, font_flag.BOLD + font_flag.SHADOW + font_flag.BORDER)
+local font_render = renderCreateFont("Arial", 12, font_flag.BOLD + font_flag.SHADOW + font_flag.BORDER)
 
-local VERSION = "1.0"
 local getBonePosition = ffi.cast("int (__thiscall*)(void*, float*, int, bool)", 0x5E4280)
-
 math.randomseed(os.time())
 
-local _menu_tab = "Main"
+-- ============================================================
+--  VARIÁVEIS E ESTADOS
+-- ============================================================
+local _menu_tab = imgui.new.int(1)
 local _last_target = 65535
 local _shots = 0
 local _log_data = {}
 local _last_log_size = 0
-
-local _state      = imgui.new.bool(false)
-local _window     = imgui.new.bool(false)
-local _log_window = imgui.new.bool(false)
-
-local _binding = nil
-local _last_bone = nil
-local _last_weapon = nil
-local _legit = nil
-local _last_infrun_state = nil
-
 local _ignored_nicks = {}
 local _ignored_skins = {}
-local _toggle_anim = {}
 
--- ============================================
--- PUXAR ARMA - CONFIG
--- ============================================
-local _puxar_max_distance  = 30.0
-local _puxar_server_cmd    = "/pegararma"
-local _puxar_busy          = false
-local _puxar_status        = "Pronto"
-local _puxar_status_color  = 0xFFFFFFFF
-local _puxar_list          = {}
+-- Buffers MImGui para Interface
+local _state = imgui.new.bool(false)
+local _log_window = imgui.new.bool(false)
 
-local _weaponModels = {
-   [321]=true,[322]=true,[323]=true,[324]=true,[325]=true,
-   [326]=true,[331]=true,[333]=true,[334]=true,[335]=true,
-   [336]=true,[337]=true,[338]=true,[339]=true,[341]=true,
-   [342]=true,[343]=true,[344]=true,[345]=true,[346]=true,
-   [347]=true,[348]=true,[349]=true,[350]=true,[351]=true,
-   [352]=true,[353]=true,[354]=true,[355]=true,[356]=true,
-   [357]=true,[358]=true,[359]=true,[360]=true,[361]=true,
-   [362]=true,[363]=true,[364]=true,[365]=true,[366]=true,
-   [367]=true,[368]=true,[369]=true,[371]=true,[372]=true
-}
-
-local _weaponNames = {
-   [321] = "Colt 45", [322] = "Silenced", [323] = "Deagle", [324] = "Shotgun",
-   [325] = "Sawn-off", [326] = "Combat Shotgun", [331] = "Micro SMG", [333] = "MP5",
-   [334] = "AK-47", [335] = "M4", [336] = "Tec-9", [337] = "Rifle",
-   [338] = "Sniper", [339] = "RPG", [341] = "Minigun", [342] = "Grenade",
-   [343] = "Smoke", [344] = "Molotov", [345] = "Ammo", [346] = "Pistol",
-   [347] = "Silenced Pistol", [348] = "Desert Eagle", [349] = "Shotgun2", [350] = "Sawnoff2",
-   [351] = "CombatShotgun2", [352] = "Micro SMG2", [353] = "MP52", [354] = "Flare",
-   [355] = "AK-47 v2", [356] = "M4 v2", [357] = "Cuntgun", [358] = "Sniper2",
-   [359] = "Rocket", [360] = "HS Rocket", [361] = "Flamethrower", [362] = "Minigun2",
-   [363] = "Satchel", [364] = "Detonator", [365] = "Spraycan", [366] = "Fire Ext",
-   [367] = "Camera", [368] = "NV Goggles", [369] = "IR Goggles", [371] = "Parachute",
-   [372] = "Fake Pistol",
-}
-
+-- ============================================================
+--  CONFIGURAÇÃO (ORIGINAL)
+-- ============================================================
 _config = {
    initmsg            = true,
+   cmd                = "sys",
    onatstart          = false,
+   checkupdates       = false,
    fov                = 20,
    hit                = 100,
    serialmisses       = false,
@@ -87,17 +56,18 @@ _config = {
    combobutton        = 0x0,
    syncrotation       = true,
    syncaimz           = true,
+   smoothaim          = false,
    ignoreobj          = false,
    ignoreveh          = false,
    ignoremyclist      = false,
    ignorebyskin       = false,
    ignorebynick       = false,
+   ignored            = {},
    debug              = false,
    indivfov           = false,
    indivhit           = false,
    wallshot           = false,
    cumbypass          = false,
-   infrun             = false,
    minfakeaimdist     = 2,
    maxfakeaimdist     = 80,
    minspread          = -0.05,
@@ -106,2146 +76,462 @@ _config = {
    maxfaketargetdist  = 30,
    guns               = {},
    bones              = { true, true, false, false, false, false, false },
-
-   esp_active         = false,
-   esp_box            = true,
-   esp_names          = true,
-   esp_lines          = false,
-   esp_skin_id        = false,
-   globalDistance     = 300,
-   deagleDistance     = 30,
-   m4Distance         = 60,
 }
 
-local _save_map = {
-   fov = "cfg_01", hit = "cfg_02", serialmisses = "cfg_03",
-   preferboneupd = "cfg_04", missafter = "cfg_05", fromthehip = "cfg_06",
-   lockactive = "cfg_07", lockbutton = "cfg_08", menubutton = "cfg_09",
-   statebutton = "cfg_10", combobutton = "cfg_11", onatstart = "cfg_12",
-   initmsg = "cfg_13", debug = "cfg_14",
-   syncrotation = "net_01", syncaimz = "net_02", faketarget = "net_03",
-   cumbypass = "net_04", wallshot = "net_05", infrun = "net_06",
-   ignoreobj = "ign_01", ignoreveh = "ign_02", ignoremyclist = "ign_03",
-   ignorebyskin = "ign_04", ignorebynick = "ign_05",
-   indivfov = "opt_01", indivhit = "opt_02",
-   minfakeaimdist = "rng_01", maxfakeaimdist = "rng_02",
-   minspread = "rng_03", maxspread = "rng_04", maxfaketargetdist = "rng_05",
-   esp_active = "esp_01", esp_box = "esp_02", esp_names = "esp_03",
-   esp_lines = "esp_04", esp_skin_id = "esp_05",
-   globalDistance = "esp_06", deagleDistance = "esp_07", m4Distance = "esp_08",
-}
-
-local _load_map = {}
-for real, crypto in pairs(_save_map) do _load_map[crypto] = real end
-
-local _color_map = {
-   ["clr_01a"] = { "_esp_color_box",     0 }, ["clr_01b"] = { "_esp_color_box",     1 }, ["clr_01c"] = { "_esp_color_box",     2 },
-   ["clr_02a"] = { "_esp_color_blocked", 0 }, ["clr_02b"] = { "_esp_color_blocked", 1 }, ["clr_02c"] = { "_esp_color_blocked", 2 },
-   ["clr_03a"] = { "_esp_color_name",    0 }, ["clr_03b"] = { "_esp_color_name",    1 }, ["clr_03c"] = { "_esp_color_name",    2 },
-   ["clr_04a"] = { "_esp_color_id",      0 }, ["clr_04b"] = { "_esp_color_id",      1 }, ["clr_04c"] = { "_esp_color_id",      2 },
-   ["clr_05a"] = { "_esp_color_line",    0 }, ["clr_05b"] = { "_esp_color_line",    1 }, ["clr_05c"] = { "_esp_color_line",    2 },
-}
-
-local _username = os.getenv("USERNAME") or "User"
-local _save_dir  = "C:\\Users\\" .. _username .. "\\AppData\\Local\\Microsoft\\Windows\\INetCache\\"
-local _save_file = _save_dir .. "dx9stat.dat"
-
-function _saveConfig()
-   pcall(function()
-      if not doesDirectoryExist(_save_dir) then createDirectory(_save_dir) end
-      local f = io.open(_save_file, "w")
-      if not f then return end
-      for real_name, crypto_name in pairs(_save_map) do
-         local value = _config[real_name]
-         if value ~= nil then
-            if type(value) == "boolean" then f:write(crypto_name.."="..tostring(value).."\n")
-            elseif type(value) == "number" then f:write(crypto_name.."="..value.."\n") end
-         end
-      end
-      if _esp_color_box then f:write("clr_01a=".._esp_color_box[0].."\nclr_01b=".._esp_color_box[1].."\nclr_01c=".._esp_color_box[2].."\n") end
-      if _esp_color_blocked then f:write("clr_02a=".._esp_color_blocked[0].."\nclr_02b=".._esp_color_blocked[1].."\nclr_02c=".._esp_color_blocked[2].."\n") end
-      if _esp_color_name then f:write("clr_03a=".._esp_color_name[0].."\nclr_03b=".._esp_color_name[1].."\nclr_03c=".._esp_color_name[2].."\n") end
-      if _esp_color_id then f:write("clr_04a=".._esp_color_id[0].."\nclr_04b=".._esp_color_id[1].."\nclr_04c=".._esp_color_id[2].."\n") end
-      if _esp_color_line then f:write("clr_05a=".._esp_color_line[0].."\nclr_05b=".._esp_color_line[1].."\nclr_05c=".._esp_color_line[2].."\n") end
-      f:write("pxr_01=".._puxar_max_distance.."\npxr_02=".._puxar_server_cmd.."\n")
-      if _ignored_skins then for i, skin in ipairs(_ignored_skins) do f:write("sk_"..string.format("%03d", i).."="..skin.."\n") end end
-      if _ignored_nicks then for i, nick in ipairs(_ignored_nicks) do f:write("nk_"..string.format("%03d", i).."="..nick.."\n") end end
-      f:close()
-   end)
-end
-
-function _loadConfig()
-   if not doesFileExist(_save_file) then return false end
-   local f = io.open(_save_file, "r")
-   if not f then return false end
-   if _ignored_skins then for i = #_ignored_skins, 1, -1 do table.remove(_ignored_skins, i) end end
-   if _ignored_nicks then for i = #_ignored_nicks, 1, -1 do table.remove(_ignored_nicks, i) end end
-   for line in f:lines() do
-      local key, value = line:match("^([^=]+)=(.+)$")
-      if key and value then
-         local real_name = _load_map[key]
-         if real_name then
-            if value == "true" then _config[real_name] = true
-            elseif value == "false" then _config[real_name] = false
-            else local num = tonumber(value) if num then _config[real_name] = num end end
-         end
-         local color_info = _color_map[key]
-         if color_info then
-            local ptr_name, idx = color_info[1], color_info[2]
-            local num = tonumber(value)
-            if num and _G[ptr_name] then _G[ptr_name][idx] = num end
-         end
-         if key == "pxr_01" then local num = tonumber(value) if num then _puxar_max_distance = num end end
-         if key == "pxr_02" then _puxar_server_cmd = value end
-         local skin_key = key:match("^sk_(%d+)$") if skin_key and _ignored_skins then table.insert(_ignored_skins, tonumber(value)) end
-         local nick_key = key:match("^nk_(%d+)$") if nick_key and _ignored_nicks then table.insert(_ignored_nicks, value) end
-      end
-   end
-   f:close()
-   return true
-end
-
--- ============================================
--- PUXAR ARMA - FUNÇÕES
--- ============================================
-function _puxar_distance3d(x1, y1, z1, x2, y2, z2) return math.sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2) end
-function _puxar_normalize(a, b, c, d) if type(a) == "boolean" then if not a then return nil end a, b, c = b, c, d end if type(a) ~= "number" or type(b) ~= "number" or type(c) ~= "number" then return nil end return a, b, c end
-
-function _puxar_scanNearby(px, py, pz)
-   local list = {}
-   for pickupId = 0, 4095 do
-      local handle = sampGetPickupHandleBySampId(pickupId)
-      if handle and handle ~= 0 and doesPickupExist(handle) then
-         local model
-         if type(sampGetPickupModelTypeBySampId) == "function" then model = sampGetPickupModelTypeBySampId(pickupId)
-         elseif type(sampGetPickupModelBySampId) == "function" then model = sampGetPickupModelBySampId(pickupId) end
-         if _weaponModels[model] then
-            local x, y, z = _puxar_normalize(getPickupCoordinates(handle))
-            if x then
-               local dist = _puxar_distance3d(px, py, pz, x, y, z)
-               if dist <= _puxar_max_distance then table.insert(list, { model = model, name = _weaponNames[model] or ("Arma #"..model), x = x, y = y, z = z, distance = dist, kind = "pickup", id = pickupId }) end
-            end
-         end
-      end
-   end
-   for objectId = 0, 999 do
-      local handle = sampGetObjectHandleBySampId(objectId)
-      if handle and doesObjectExist(handle) then
-         local model = getObjectModel(handle)
-         if _weaponModels[model] then
-            local x, y, z = _puxar_normalize(getObjectCoordinates(handle))
-            if x then
-               local dist = _puxar_distance3d(px, py, pz, x, y, z)
-               if dist <= _puxar_max_distance then table.insert(list, { model = model, name = _weaponNames[model] or ("Objeto #"..model), x = x, y = y, z = z, distance = dist, kind = "object", id = objectId }) end
-            end
-         end
-      end
-   end
-   table.sort(list, function(a, b) return a.distance < b.distance end)
-   return list
-end
-
-function _puxar_refreshList()
-   if not sampIsLocalPlayerSpawned() then _puxar_list = {} return end
-   local px, py, pz = getCharCoordinates(PLAYER_PED)
-   _puxar_list = _puxar_scanNearby(px, py, pz)
-end
-
-function _puxar_executeFromList(entry)
-   if _puxar_busy then return end
-   if not sampIsLocalPlayerSpawned() then _puxar_status = "Entre no jogo primeiro" _puxar_status_color = 0xFFFF5555 return end
-   if isCharInAnyCar(PLAYER_PED) then _puxar_status = "Saia do veiculo primeiro" _puxar_status_color = 0xFFFF5555 return end
-   local x, y, z = getCharCoordinates(PLAYER_PED)
-   _puxar_busy = true
-   _puxar_status = string.format("Puxando %s (%.1fm)...", entry.name, entry.distance)
-   _puxar_status_color = 0xFF66FF99
-   lua_thread.create(function()
-      local cameraLocked = false
-      local function restore()
-         pcall(setCharCoordinates, PLAYER_PED, x, y, z) pcall(freezeCharPosition, PLAYER_PED, false) pcall(setCharVisible, PLAYER_PED, true)
-         if cameraLocked and type(restoreCameraJumpcut) == "function" then pcall(restoreCameraJumpcut) end
-      end
-      local ok = xpcall(function()
-         if type(getActiveCameraCoordinates) == "function" and type(getActiveCameraPointAt) == "function" and type(setFixedCameraPosition) == "function" and type(pointCameraAtPoint) == "function" then
-            local cx, cy, cz = getActiveCameraCoordinates() local lx, ly, lz = getActiveCameraPointAt()
-            setFixedCameraPosition(cx, cy, cz, 0.0, 0.0, 0.0) pointCameraAtPoint(lx, ly, lz, 2) cameraLocked = true
-         end
-         setCharVisible(PLAYER_PED, false) freezeCharPosition(PLAYER_PED, true)
-         setCharCoordinates(PLAYER_PED, entry.x, entry.y, entry.z + 0.15) wait(300)
-         sampSendChat(_puxar_server_cmd) wait(450)
-      end, debug.traceback)
-      restore() _puxar_busy = false
-      if ok then _puxar_status = entry.name.." coletada!" _puxar_status_color = 0xFF66FF99
-      else _puxar_status = "Erro ao coletar" _puxar_status_color = 0xFFFF5555 end
-   end)
-end
-
-function _puxar_main()
-   if _puxar_busy then _puxar_status = "Ja estou puxando..." _puxar_status_color = 0xFFFFAA33 return end
-   if not sampIsLocalPlayerSpawned() then _puxar_status = "Entre no jogo primeiro" _puxar_status_color = 0xFFFF5555 return end
-   if isCharInAnyCar(PLAYER_PED) then _puxar_status = "Saia do veiculo primeiro" _puxar_status_color = 0xFFFF5555 return end
-   _puxar_refreshList()
-   if #_puxar_list == 0 then _puxar_status = string.format("Nenhuma arma em %.0fm", _puxar_max_distance) _puxar_status_color = 0xFFFFAA33 return end
-   _puxar_executeFromList(_puxar_list[1])
-end
-
+-- ============================================================
+--  ARMAS E OSSOS (ORIGINAL)
+-- ============================================================
 local _weapons = {}
-local function _initWeapon(id, name, dist, damage) _weapons[id] = { id = id, name = name, dist = dist, damage = damage } end
-_initWeapon(22, "W1", 35.0, 8.25) _initWeapon(23, "W2", 35.0, 13.2) _initWeapon(24, "W3", 35.0, 46.200000762939) _initWeapon(25, "W4", 40.0, 30) _initWeapon(26, "W5", 35.0, 30) _initWeapon(27, "W6", 40.0, 30) _initWeapon(28, "W7", 35.0, 6.6) _initWeapon(29, "W8", 45.0, 8.25) _initWeapon(30, "W9", 70.0, 9.900024) _initWeapon(31, "W10", 90.0, 9.9000005722046) _initWeapon(32, "W11", 35.0, 6.6) _initWeapon(33, "W12", 95.0, 24.750001907349) _initWeapon(34, "W13", 320.0, 41) _initWeapon(38, "W14", 75.0, 46.2)
-for _, w in pairs(_weapons) do _config.guns[w.name] = { fov = 20, hit = 100 } end
+local function _initWeapon(id, name, dist, damage)
+   _weapons[id] = { id = id, name = name, dist = dist, damage = damage }
+end
+
+_initWeapon(22, "Colt45", 35.0, 8.25)
+_initWeapon(23, "Silenced", 35.0, 13.2)
+_initWeapon(24, "Deagle", 35.0, 46.2)
+_initWeapon(25, "Shotgun", 40.0, 30)
+_initWeapon(26, "Sawnoff", 35.0, 30)
+_initWeapon(27, "Spas12", 40.0, 30)
+_initWeapon(28, "Uzi", 35.0, 6.6)
+_initWeapon(29, "MP5", 45.0, 8.25)
+_initWeapon(30, "AK47", 70.0, 9.9)
+_initWeapon(31, "M4", 90.0, 9.9)
+_initWeapon(32, "Tec9", 35.0, 6.6)
+_initWeapon(33, "Rifle", 95.0, 24.7)
+_initWeapon(34, "Sniper", 320.0, 41)
+_initWeapon(38, "Minigun", 75.0, 46.2)
+
+for _, w in pairs(_weapons) do
+   _config.guns[w.name] = { fov = 20, hit = 100 }
+end
 
 local _bones = {
-   { dots = { 31 }, name = "Cabeça" }, { dots = { 2, 41, 51 }, name = "Peito" }, { dots = { 33, 32, 34, 35 }, name = "Tronco" },
-   { dots = { 23, 22, 34, 25 }, name = "Braços" }, { dots = { 42, 43, 44 }, name = "Pernas" }, { dots = { 52, 53, 54 }, name = "Pés" }, { dots = { 8, 7 }, name = "Mãos" }
+   { dots = { 31 }, name = "Head (B1)" },
+   { dots = { 2, 41, 51 }, name = "Torso (B2)" },
+   { dots = { 33, 32, 34, 35 }, name = "Left Arm (B3)" },
+   { dots = { 23, 22, 34, 25 }, name = "Right Arm (B4)" },
+   { dots = { 42, 43, 44 }, name = "Left Leg (B5)" },
+   { dots = { 52, 53, 54 }, name = "Right Leg (B6)" },
+   { dots = { 8, 7 }, name = "Pelvis (B7)" }
 }
-function _addLog(text, result) table.insert(_log_data, (result and "{64FF64}" or "{FF6464}").."["..os.date("%H:%M:%S", os.time()).."] ["..(result and "DONE" or "SKIP").."] > "..text) end
 
-local _fov_slider, _hit_slider, _ind_fov_slider, _ind_hit_slider, _skin_buff, _pref_bone, _pref_bone_upd, _min_fake_dist, _max_fake_dist, _min_spread, _max_spread, _miss_after, _nick_buff, _global_dist_slider, _deagle_dist_slider, _m4_dist_slider, _esp_color_box, _esp_color_blocked, _esp_color_name, _esp_color_id, _esp_color_line, _puxar_dist_slider, _puxar_cmd_buffer, _last_key_state = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+-- Buffers MImGui para Sliders e Inputs
+local _fov_slider = imgui.new.float(_config.fov)
+local _hit_slider = imgui.new.float(_config.hit)
+local _ind_fov_slider = imgui.new.float(0.0)
+local _ind_hit_slider = imgui.new.float(0.0)
+local _min_fake_dist = imgui.new.int(_config.minfakeaimdist)
+local _max_fake_dist = imgui.new.int(_config.maxfakeaimdist)
+local _min_spread = imgui.new.float(_config.minspread)
+local _max_spread = imgui.new.float(_config.maxspread)
+local _miss_after = imgui.new.int(_config.missafter)
+local _pref_bone_upd = imgui.new.int(_config.preferboneupd)
+local _nick_buff = imgui.new.char[64]()
+local _skin_buff = imgui.new.int(0)
 
-function _getCamMode() local aimptr = allocateMemory(31) local _, pid = sampGetPlayerIdByCharHandle(PLAYER_PED) sampStorePlayerAimData(pid, aimptr) local mode = memory.getuint8(aimptr, 0) freeMemory(aimptr) return mode end
-function _getBodyPart(id, handle) local pedptr = getCharPointer(handle) local vec = ffi.new("float[3]") getBonePosition(ffi.cast("void*", pedptr), vec, id, true) return vector3d(vec[0], vec[1], vec[2]) end
-function _getSightPos() if getCurrentCharWeapon(PLAYER_PED) == 34 then local x, y = getScreenResolution() return { x = x/2, y = y/2 } else local sx, sy = convertGameScreenCoordsToWindowScreenCoords(339.1, 179.1) return { x = sx, y = sy } end end
-function _getWeapon() return _weapons[getCurrentCharWeapon(PLAYER_PED)] end
-function _getRandomBone() local temp = {} for key, bone in ipairs(_config.bones) do if bone then table.insert(temp, key) end end if #temp > 0 then return temp[math.random(1, #temp)] end return math.random(1, #_bones) end
-function _isTableHasValue(t, v) for _, val in ipairs(t) do if val == v then return true end end return false end
-function _tryInsert(t, v) if not _isTableHasValue(t, v) then table.insert(t, v) end end
-function _updateIP() if not _ignored_skins then _ignored_skins = {} end if not _ignored_nicks then _ignored_nicks = {} end end
-function _writeWallshot() for _, addr in ipairs({ 0x00740701, 0x00740703, 0x00740709, 0x00740B49, 0x00740B4B, 0x00740B51, 0x0073620D, 0x0073620F, 0x00736215 }) do memory.write(addr, _config.wallshot and 0 or 1, 1, true) end end
-function _writeInfRun(state) setPlayerNeverGetsTired(PLAYER_HANDLE, state) end
+-- ============================================================
+--  SISTEMA DE ANIMAÇÃO E TEMA (MOLDE)
+-- ============================================================
+local fade_meta = {
+    __index = function(self, key)
+        if key == 'toggle' then
+            return function()
+                if self.thread and self.thread:status() ~= 'dead' then return false end
+                self.timer = os.clock()
+                self.state = not self.state
+                self.thread = lua_thread.create(function()
+                    while true do wait(0)
+                        local t = os.clock() - self.timer
+                        local ratio = (t >= 0 and t <= self.duration) and (t / self.duration) or (t > self.duration and 1.0 or 0.0)
+                        self.alpha = self.state and ratio or (1.0 - ratio)
+                        if ratio == 1.0 then break end
+                    end
+                end)
+                return true
+            end
+        end
+    end
+}
+local menu_anim = {state = false, duration = 0.4, alpha = 0.0}
+setmetatable(menu_anim, fade_meta)
+
+function imgui.CustomTheme()
+    local style = imgui.GetStyle()
+    style.WindowRounding = 12
+    style.FrameRounding = 6
+    style.ChildRounding = 8
+    style.ItemSpacing = imgui.ImVec2(10, 10)
+    style.WindowPadding = imgui.ImVec2(15, 15)
+
+    local c, col, v4 = style.Colors, imgui.Col, imgui.ImVec4
+    c[col.Text]                 = v4(0.95, 0.90, 0.95, 1.00)
+    c[col.WindowBg]             = v4(0.10, 0.08, 0.12, 0.98)
+    c[col.ChildBg]              = v4(0.14, 0.11, 0.17, 1.00)
+    c[col.Border]               = v4(0.80, 0.35, 0.65, 0.40)
+    c[col.FrameBg]              = v4(0.20, 0.15, 0.25, 1.00)
+    c[col.FrameBgHovered]       = v4(0.30, 0.20, 0.38, 1.00)
+    c[col.FrameBgActive]        = v4(0.40, 0.25, 0.50, 1.00)
+    c[col.Button]               = v4(0.30, 0.20, 0.40, 1.00)
+    c[col.ButtonHovered]        = v4(0.50, 0.30, 0.65, 1.00)
+    c[col.ButtonActive]         = v4(0.75, 0.40, 0.85, 1.00)
+    c[col.CheckMark]            = v4(1.00, 0.40, 0.80, 1.00)
+    c[col.SliderGrab]           = v4(0.90, 0.35, 0.75, 1.00)
+    c[col.SliderGrabActive]     = v4(1.00, 0.45, 0.85, 1.00)
+    c[col.SeparatorActive]      = v4(1.00, 0.40, 0.80, 0.90)
+end
+
+-- ============================================================
+--  WIDGETS CUSTOMIZADOS (MOLDE)
+-- ============================================================
+function imgui.ToggleButton(str_id, bool)
+    local p = imgui.GetCursorScreenPos()
+    local dl = imgui.GetWindowDrawList()
+    local h = imgui.GetTextLineHeightWithSpacing()
+    local w = h * 1.8
+    local r = h / 2
+    
+    if imgui.InvisibleButton(str_id, imgui.ImVec2(w, h)) then
+        bool[0] = not bool[0]
+    end
+
+    local col = bool[0] and imgui.GetStyle().Colors[imgui.Col.ButtonActive] or imgui.GetStyle().Colors[imgui.Col.FrameBg]
+    dl:AddRectFilled(imgui.ImVec2(p.x, p.y), imgui.ImVec2(p.x + w, p.y + h), imgui.GetColorU32Vec4(col), r)
+    local circle_x = bool[0] and (p.x + w - r) or (p.x + r)
+    dl:AddCircleFilled(imgui.ImVec2(circle_x, p.y + r), r * 0.8, imgui.GetColorU32Vec4(imgui.GetStyle().Colors[imgui.Col.Text]), 12)
+    imgui.SameLine()
+    imgui.SetCursorPosX(imgui.GetCursorPosX() + w - 10)
+    imgui.Text(str_id)
+end
+
+function imgui.MenuItem2(index, name, nav_sel)
+    local p = imgui.GetCursorScreenPos()
+    local dl = imgui.GetWindowDrawList()
+    local size = imgui.ImVec2(120, 35)
+    local is_selected = (nav_sel[0] == index)
+    
+    if imgui.InvisibleButton(name .. "##" .. index, size) then
+        nav_sel[0] = index
+    end
+    
+    if is_selected or imgui.IsItemHovered() then
+        local col = is_selected and imgui.GetStyle().Colors[imgui.Col.SeparatorActive] or imgui.ImVec4(0.3, 0.2, 0.3, 0.4)
+        dl:AddRectFilled(p, imgui.ImVec2(p.x + size.x, p.y + size.y), imgui.GetColorU32Vec4(col), 8)
+    end
+    
+    local ts = imgui.CalcTextSize(name)
+    dl:AddText(imgui.ImVec2(p.x + 15, p.y + size.y/2 - ts.y/2), imgui.GetColorU32Vec4(imgui.GetStyle().Colors[imgui.Col.Text]), name)
+end
+
+-- ============================================================
+--  LÓGICA DO SILENT AIM (100% ORIGINAL)
+-- ============================================================
+function _addLog(text, result)
+   table.insert(_log_data, (result and "{64FF64}" or "{FF6464}").."["..os.date("%H:%M:%S", os.time()).."] ["..(result and "DONE" or "SKIP").."] > "..text)
+end
+
+function _getCamMode()
+   local aimptr = allocateMemory(31)
+   local result, pid = sampGetPlayerIdByCharHandle(PLAYER_PED)
+   if result then
+      sampStorePlayerAimData(pid, aimptr)
+      local mode = memory.getuint8(aimptr, 0)
+      freeMemory(aimptr)
+      return mode
+   end
+   return 0
+end
+
+function _getBodyPart(id, handle)
+   local pedptr = getCharPointer(handle)
+   local vec = ffi.new("float[3]")
+   getBonePosition(ffi.cast("void*", pedptr), vec, id, true)
+   return vector3d(vec[0], vec[1], vec[2])
+end
+
+function _getSightPos()
+   if getCurrentCharWeapon(PLAYER_PED) == 34 then
+      local x, y = getScreenResolution()
+      return { x = x/2, y = y/2 }
+   else
+      local x, y = convertGameScreenCoordsToWindowScreenCoords(339.1, 179.1)
+      return { x = x, y = y }
+   end
+end
+
+function _getWeapon()
+   return _weapons[getCurrentCharWeapon(PLAYER_PED)]
+end
+
+function _getRandomBone()
+   local temp = {}
+   for key, bone in ipairs(_config.bones) do
+      if bone then table.insert(temp, key) end
+   end
+   if #temp > 0 then
+      local idx = temp[math.random(1, #temp)]
+      return idx
+   end
+   return 1
+end
+
+function _isTableHasValue(t, v)
+   for _, val in ipairs(t) do if val == v then return true end end
+   return false
+end
+
+function _tryInsert(t, v)
+   if not _isTableHasValue(t, v) then table.insert(t, v) end
+end
+
+function _updateIP()
+   local ip = sampGetCurrentServerAddress()
+   if not _config.ignored[ip] then _config.ignored[ip] = { nicks = {}, skins = {} } end
+   _ignored_nicks = _config.ignored[ip].nicks
+   _ignored_skins = _config.ignored[ip].skins
+end
+
+function _writeWallshot()
+   for _, addr in ipairs({ 0x00740701, 0x00740703, 0x00740709, 0x00740B49, 0x00740B4B, 0x00740B51, 0x0073620D, 0x0073620F, 0x00736215 }) do
+      memory.write(addr, _config.wallshot and 0 or 1, 1, true)
+   end
+end
+
 function _vector2d(x, y) return { x = x, y = y } end
-function _randomFloat(low, great) return low + math.random() * (great - low) end
 
-function _rgbToArgb(ptr, alpha)
-   if not ptr then return 0xFFFFFFFF end
-   local r = math.floor((ptr[0] or 1.0) * 255) local g = math.floor((ptr[1] or 1.0) * 255) local b = math.floor((ptr[2] or 1.0) * 255) local a = math.floor((alpha or 1.0) * 255)
-   return bit.bor(bit.lshift(a, 24), bit.lshift(r, 16), bit.lshift(g, 8), b)
-end
-function _rgbToImVec4(ptr) if not ptr then return imgui.ImVec4(1, 1, 1, 1) end return imgui.ImVec4(ptr[0], ptr[1], ptr[2], 1.0) end
-
-function _toggle(text, key)
-   if not _toggle_anim[key] then _toggle_anim[key] = _config[key] and 1.0 or 0.0 end
-   local w, h = 36, 18 local radius = h / 2 local target = _config[key] and 1.0 or 0.0
-   _toggle_anim[key] = _toggle_anim[key] + (target - _toggle_anim[key]) * 0.25
-   local t = _toggle_anim[key]
-   local r = 0.25 + (0.35 - 0.25) * t local g = 0.25 + (0.75 - 0.25) * t local b = 0.30 + (0.40 - 0.30) * t local bg = imgui.ImVec4(r, g, b, 1.0)
-   local start_pos = imgui.GetCursorScreenPos() local total_w = w + 8 + imgui.CalcTextSize(text).x
-   imgui.Dummy(imgui.ImVec2(total_w, h)) imgui.SetCursorScreenPos(start_pos)
-   local clicked = imgui.InvisibleButton("##tg_" .. key, imgui.ImVec2(w, h))
-   imgui.SetCursorScreenPos(start_pos)
-   local draw = imgui.GetWindowDrawList()
-   draw:AddRectFilled(imgui.ImVec2(start_pos.x, start_pos.y), imgui.ImVec2(start_pos.x + w, start_pos.y + h), imgui.ColorConvertFloat4ToU32(bg), radius)
-   local knob_x = start_pos.x + radius + (w - h) * t
-   draw:AddCircleFilled(imgui.ImVec2(knob_x, start_pos.y + radius), radius - 2, imgui.ColorConvertFloat4ToU32(imgui.ImVec4(1.0, 1.0, 1.0, 1.0)))
-   local text_y = start_pos.y + (h - imgui.GetTextLineHeight()) / 2
-   imgui.SetCursorScreenPos(imgui.ImVec2(start_pos.x + w + 8, text_y)) imgui.Text(text)
-   if clicked then _config[key] = not _config[key] end
-   return clicked
-end
-
-function _colorButton(id, colorPtr)
-   imgui.PushStyleColor(imgui.Col.Button, _rgbToImVec4(colorPtr)) imgui.PushStyleColor(imgui.Col.ButtonHovered, _rgbToImVec4(colorPtr)) imgui.PushStyleColor(imgui.Col.ButtonActive, _rgbToImVec4(colorPtr))
-   local clicked = false
-   if imgui.Button("X##"..id, imgui.ImVec2(24, 20)) then clicked = true end
-   imgui.PopStyleColor(3) return clicked
-end
-
-function TextColoredRGB(text)
-   local explode_argb = function(argb) return bit.band(bit.rshift(argb, 24), 0xFF), bit.band(bit.rshift(argb, 16), 0xFF), bit.band(bit.rshift(argb, 8), 0xFF), bit.band(argb, 0xFF) end
-   local getcolor = function(color) local color = type(color) == "string" and tonumber(color, 16) or color if type(color) ~= "number" then return nil end local r, g, b, a = explode_argb(color) return imgui.ImVec4(r / 255, g / 255, b / 255, a / 255) end
-   for w in text:gmatch("[^\r\n]+") do
-      local parts, colors_, m = {}, {}, 1 w = w:gsub("{(......)}", "{%1FF}")
-      while w:find("{........}") do local n, k = w:find("{........}") local color = getcolor(w:sub(n + 1, k - 1)) if color then parts[#parts], parts[#parts + 1] = w:sub(m, n - 1), w:sub(k + 1, #w) colors_[#colors_ + 1] = color m = n end w = w:sub(1, n - 1) .. w:sub(k + 1, #w) end
-      if parts[0] then for i = 0, #parts do imgui.TextColored(colors_[i] or imgui.ImVec4(1, 1, 1, 1), parts[i]) imgui.SameLine(nil, 0) end imgui.NewLine() else imgui.Text(w) end
-   end
-end
-
-function _captureKey()
-   if not _binding then return end
-   for key = 1, 255 do
-      local isDown = imgui.IsKeyDown(key) local wasDown = _last_key_state[key] or false
-      if isDown and not wasDown then
-         if key == 27 then _binding = nil
-         elseif key == 8 then _config[_binding.key] = 0 _binding = nil
-         else _config[_binding.key] = key _binding = nil end
-      end
-      _last_key_state[key] = isDown
-   end
-end
-
-function drawESP()
-   if not _config.esp_active then return end
-   local pPosX, pPosY, pPosZ = getCharCoordinates(PLAYER_PED)
-   for i = 0, sampGetMaxPlayerId() do
-      if sampIsPlayerConnected(i) then
-         local result, ped = sampGetCharHandleBySampPlayerId(i)
-         if result and ped ~= PLAYER_PED and doesCharExist(ped) and not isCharDead(ped) then
-            local posX, posY, posZ = getCharCoordinates(ped) local distance = getDistanceBetweenCoords3d(posX, posY, posZ, pPosX, pPosY, pPosZ)
-            if distance <= _config.globalDistance and isCharOnScreen(ped) then
-               local wPosX, wPosY = convert3DCoordsToScreen(posX, posY, posZ)
-               if wPosX and wPosY then
-                  local player_name = sampGetPlayerNickname(i) local skin = nil pcall(function() skin = getCharModel(ped) end)
-                  local is_blocked = false
-                  if skin and _isTableHasValue(_ignored_skins, skin) then is_blocked = true end
-                  if player_name and _isTableHasValue(_ignored_nicks, player_name) then is_blocked = true end
-                  local boxColor = is_blocked and _rgbToArgb(_esp_color_blocked, 1.0) or _rgbToArgb(_esp_color_box, 1.0)
-                  if _config.esp_box then
-                     local boxW, boxH = 60, 95 local left, right, top, bottom = wPosX - boxW/2, wPosX + boxW/2, wPosY - boxH/2 - 15, wPosY + boxH/2 - 15
-                     local cL, th = 12, 1.5
-                     renderDrawLine(left, top, left + cL, top, th, boxColor) renderDrawLine(left, top, left, top + cL, th, boxColor)
-                     renderDrawLine(right, top, right - cL, top, th, boxColor) renderDrawLine(right, top, right, top + cL, th, boxColor)
-                     renderDrawLine(left, bottom, left + cL, bottom, th, boxColor) renderDrawLine(left, bottom, left, bottom - cL, th, boxColor)
-                     renderDrawLine(right, bottom, right - cL, bottom, th, boxColor) renderDrawLine(right, bottom, right, bottom - cL, th, boxColor)
-                  end
-                  if _config.esp_skin_id and skin then pcall(function() renderFontDrawText(font, "ID: "..tostring(skin), wPosX - 20, wPosY - 78, _rgbToArgb(_esp_color_id, 1.0)) end) end
-                  if _config.esp_names and player_name then local nameColor = is_blocked and boxColor or _rgbToArgb(_esp_color_name, 1.0) renderFontDrawText(font, player_name, wPosX - (#player_name * 3), wPosY - 65, nameColor) end
-                  if _config.esp_lines then local screen_w, screen_h = getScreenResolution() local lineColor = is_blocked and boxColor or _rgbToArgb(_esp_color_line, 0.56) renderDrawLine(screen_w/2, screen_h, wPosX, wPosY, 1, lineColor) end
-               end
-            end
-         end
-      end
-   end
-end
-
-imgui.OnInitialize(function()
-   local style = imgui.GetStyle() local colors = style.Colors local clr = imgui.Col local ImVec4 = imgui.ImVec4
-   style.WindowRounding    = 8.0 style.FrameRounding     = 4.0 style.GrabRounding      = 4.0 style.ScrollbarRounding = 6.0
-   style.WindowPadding     = imgui.ImVec2(10, 10) style.FramePadding      = imgui.ImVec2(6, 4) style.ItemSpacing       = imgui.ImVec2(8, 6)
-   colors[clr.WindowBg]             = ImVec4(0.06, 0.06, 0.09, 0.97) colors[clr.TitleBg]              = ImVec4(0.08, 0.08, 0.12, 1.00)
-   colors[clr.TitleBgActive]        = ImVec4(0.12, 0.10, 0.20, 1.00) colors[clr.MenuBarBg]            = ImVec4(0.10, 0.10, 0.15, 1.00)
-   colors[clr.ScrollbarBg]          = ImVec4(0.06, 0.06, 0.09, 0.60) colors[clr.ScrollbarGrab]        = ImVec4(0.35, 0.30, 0.55, 0.80)
-   colors[clr.ScrollbarGrabHovered] = ImVec4(0.45, 0.38, 0.70, 0.90) colors[clr.ScrollbarGrabActive]  = ImVec4(0.55, 0.45, 0.85, 1.00)
-   colors[clr.CheckMark]            = ImVec4(0.65, 0.50, 0.95, 1.00) colors[clr.Button]               = ImVec4(0.16, 0.14, 0.22, 0.80)
-   colors[clr.ButtonHovered]        = ImVec4(0.28, 0.22, 0.45, 1.00) colors[clr.ButtonActive]         = ImVec4(0.38, 0.30, 0.60, 1.00)
-   colors[clr.Header]               = ImVec4(0.20, 0.16, 0.32, 0.80) colors[clr.HeaderHovered]        = ImVec4(0.32, 0.24, 0.50, 0.90)
-   colors[clr.HeaderActive]         = ImVec4(0.42, 0.32, 0.65, 1.00) colors[clr.FrameBg]              = ImVec4(0.10, 0.10, 0.14, 0.90)
-   colors[clr.FrameBgHovered]       = ImVec4(0.16, 0.14, 0.24, 1.00) colors[clr.FrameBgActive]        = ImVec4(0.20, 0.16, 0.30, 1.00)
-   colors[clr.SliderGrab]           = ImVec4(0.55, 0.40, 0.90, 1.00) colors[clr.SliderGrabActive]     = ImVec4(0.70, 0.55, 1.00, 1.00)
-   colors[clr.Separator]            = ImVec4(0.25, 0.20, 0.40, 0.80) colors[clr.Text]                 = ImVec4(0.85, 0.85, 0.90, 1.00)
-end)
-
-local _menu_items = { "Main", "Config", "Control", "ESP", "Puxar Arma", "Extra" }
-
-imgui.OnFrame(
-   function() return _window[0] or _log_window[0] end,
-   function()
-      _captureKey()
-      if _last_infrun_state ~= _config.infrun then _last_infrun_state = _config.infrun _writeInfRun(_config.infrun) end
-      if _window[0] then
-         imgui.SetNextWindowPos(imgui.ImVec2(350.0, 300.0), imgui.Cond.FirstUseEver)
-         imgui.SetNextWindowSize(imgui.ImVec2(470.0, 450.0), imgui.Cond.FirstUseEver)
-         imgui.PushStyleColor(imgui.Col.TitleBg, imgui.ImVec4(0.10, 0.10, 0.14, 1.0))
-         imgui.PushStyleColor(imgui.Col.TitleBgActive, imgui.ImVec4(0.14, 0.10, 0.22, 1.0))
-         imgui.PushStyleColor(imgui.Col.Text, imgui.ImVec4(1.0, 1.0, 1.0, 1.0))
-         imgui.Begin("REAL BLACKLIST", _window, imgui.WindowFlags.MenuBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
-         
-         local draw_list = imgui.GetWindowDrawList() local win_pos = imgui.GetWindowPos() local win_size = imgui.GetWindowSize()
-         draw_list:AddText(imgui.ImVec2(win_pos.x + win_size.x * 0.28, win_pos.y + win_size.y * 0.45), imgui.U32(1.0, 1.0, 1.0, 0.15), "BYPASS")
-
-         imgui.BeginMenuBar()
-            imgui.Checkbox("", _state) TextColoredRGB((_state[0] or _config.lockactive) and "{00FF00}ON " or "{FF0000}OFF") imgui.SameLine()
-            for _, v in ipairs(_menu_items) do if imgui.Button(v) then _menu_tab = v end imgui.SameLine() end
-         imgui.EndMenuBar()
-         imgui.Separator() imgui.Indent(5)
-
-         if _menu_tab == "Main" then
-            _toggle("Ignore objects", "ignoreobj") _toggle("Ignore vehicles", "ignoreveh") imgui.NewLine()
-            imgui.PushItemWidth(150) _toggle("Fake target", "faketarget")
-            if _config.faketarget then if imgui.SliderInt("Max dist##maxfaketargetdist", _max_fake_dist, 0, 200) then _config.maxfaketargetdist = _max_fake_dist[0] end end
-            imgui.NewLine() _toggle("Cam bypass", "cumbypass") _toggle("Sync rotation", "syncrotation") _toggle("Sync aim", "syncaimz")
-            if _config.syncrotation or _config.syncaimz then
-               if imgui.SliderInt("##minfakeaimdist", _min_fake_dist, 0, 400) then _config.minfakeaimdist = _min_fake_dist[0] end imgui.SameLine() imgui.Indent(152)
-               if imgui.SliderInt("##maxfakeaimdist", _max_fake_dist, 0, 400) then _config.maxfakeaimdist = _max_fake_dist[0] end imgui.Unindent(152) imgui.Text("Min & Max distance")
-            end
-            imgui.PopItemWidth() imgui.NewLine() _toggle("Individual Fov", "indivfov")
-            if _config.indivfov then
-               _last_weapon = _getWeapon() or _last_weapon
-               if _last_weapon and _config.guns[_last_weapon.name] then
-                  _ind_fov_slider[0] = _config.guns[_last_weapon.name].fov if imgui.SliderFloat("Fov##".._last_weapon.id, _ind_fov_slider, 0.0, 80.0) then _config.guns[_last_weapon.name].fov = _ind_fov_slider[0] end TextColoredRGB("{F59B14}Only for ".._last_weapon.name)
-               else imgui.NewLine() TextColoredRGB("{F59B14}Get any weapon") imgui.NewLine() end
-            else if imgui.SliderFloat("Fov##all", _fov_slider, 0.0, 80.00) then _config.fov = _fov_slider[0] end imgui.NewLine() end
-            if imgui.CollapsingHeader("Bones", 0) then
-               local even = false
-               for k, v in ipairs(_bones) do
-                  if even then imgui.SameLine(); imgui.Indent(150) end
-                  local ptr = ffi.new("bool[1]", _config.bones[k]) imgui.Checkbox(_bones[k].name or "Bone"..k, ptr) _config.bones[k] = ptr[0]
-                  if even then imgui.Unindent(150) end even = not even
-               end
-               imgui.NewLine() imgui.Separator()
-            end
-            imgui.NewLine() _toggle("Ignore my clist", "ignoremyclist") _toggle("Ignore by nick", "ignorebynick")
-            if _config.ignorebynick then
-               imgui.NewLine() TextColoredRGB("{F59B14}Buscar jogador:") imgui.PushItemWidth(220) imgui.InputText("##nick_search", _nick_buff, 64) imgui.PopItemWidth()
-               local nick_str = ffi.string(_nick_buff) imgui.SameLine()
-               if imgui.Button("Limpar##limpar_nick", imgui.ImVec2(60, 22)) then ffi.copy(_nick_buff, "") end
-               if nick_str:len() > 0 then imgui.SameLine() if imgui.Button("Add exato##add_exato", imgui.ImVec2(80, 22)) then _tryInsert(_ignored_nicks, nick_str) ffi.copy(_nick_buff, "") end end
-               imgui.NewLine()
-               if nick_str:len() > 0 then
-                  local nick_lower = nick_str:lower() local sugestoes = {}
-                  for id = 0, sampGetMaxPlayerId(false) do
-                     if sampIsPlayerConnected(id) then
-                        local nick = sampGetPlayerNickname(id)
-                        if nick and nick:lower():find(nick_lower, 1, true) then local pos = nick:lower():find(nick_lower, 1, true) or 999 table.insert(sugestoes, { id = id, nick = nick, pos = pos }) end
-                     end
-                  end
-                  table.sort(sugestoes, function(a, b) return a.pos < b.pos end)
-                  local total = #sugestoes if total > 8 then for i = total, 9, -1 do table.remove(sugestoes, i) end end
-                  TextColoredRGB(string.format("{F59B14}Sugestoes (%d/8):", #sugestoes))
-                  imgui.BeginChild("##sugestoes_area", imgui.ImVec2(0, 180), true)
-                  if #sugestoes == 0 then imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), "Nenhum jogador encontrado...")
-                  else
-                     for i, s in ipairs(sugestoes) do
-                        imgui.TextColored(imgui.ImVec4(0.55, 0.40, 0.90, 1.0), string.format("[%d]", s.id)) imgui.SameLine(45) imgui.Text(s.nick) imgui.SameLine(200)
-                        if imgui.Button("Adicionar##add_"..i, imgui.ImVec2(90, 20)) then _tryInsert(_ignored_nicks, s.nick) end
-                     end
-                  end
-                  imgui.EndChild() imgui.NewLine()
-               end
-               imgui.Separator() TextColoredRGB(string.format("{F59B14}Ignorados (%d):", #_ignored_nicks))
-               if #_ignored_nicks == 0 then imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), "Nenhum nick na lista")
-               else
-                  imgui.BeginChild("##ignorados_area", imgui.ImVec2(0, 100), true)
-                  for k, v in ipairs(_ignored_nicks) do
-                     imgui.PushStyleColor(imgui.Col.Button, imgui.ImVec4(0.5, 0.15, 0.15, 0.9)) imgui.PushStyleColor(imgui.Col.ButtonHovered, imgui.ImVec4(0.7, 0.2, 0.2, 1.0)) imgui.PushStyleColor(imgui.Col.ButtonActive, imgui.ImVec4(0.4, 0.1, 0.1, 1.0))
-                     if imgui.Button("X##rm_"..k, imgui.ImVec2(24, 20)) then table.remove(_ignored_nicks, k) end
-                     imgui.PopStyleColor(3) imgui.SameLine() imgui.Text(tostring(v))
-                  end
-                  imgui.EndChild()
-               end
-               imgui.NewLine() imgui.Separator()
-            end
-            _toggle("Ignore by skin", "ignorebyskin")
-            if _config.ignorebyskin then
-               imgui.PushItemWidth(80) imgui.InputInt(" ", _skin_buff) imgui.PopItemWidth() imgui.SameLine()
-               if imgui.Button("Add##add_skin") then _tryInsert(_ignored_skins, _skin_buff[0]) end
-               imgui.NewLine()
-               local items_count = 1
-               for k, v in ipairs(_ignored_skins) do
-                  if imgui.Button(tostring(v).."##skin_"..k, imgui.ImVec2(36, 20)) then table.remove(_ignored_skins, k) end
-                  if items_count % 4 > 0 then imgui.SameLine() end items_count = items_count + 1
-               end
-            end
-         elseif _menu_tab == "Config" then
-            if _toggle("Wallshot", "wallshot") then _writeWallshot() end
-            imgui.NewLine() imgui.PushItemWidth(150)
-            if imgui.SliderFloat("##minspread", _min_spread, -0.15, 0) then _config.minspread = _min_spread[0] end imgui.SameLine() imgui.Indent(152)
-            if imgui.SliderFloat("##maxspread", _max_spread, 0, 0.15) then _config.maxspread = _max_spread[0] end imgui.Unindent(152) imgui.PopItemWidth() imgui.Text("Min & Max spread")
-            imgui.NewLine() _toggle("Individual Hit", "indivhit")
-            if _config.indivhit then
-               _last_weapon = _getWeapon() or _last_weapon
-               if _last_weapon and _config.guns[_last_weapon.name] then
-                  _ind_hit_slider[0] = _config.guns[_last_weapon.name].hit if imgui.SliderFloat("Hit##".._last_weapon.id, _ind_hit_slider, 0.0, 100.0) then _config.guns[_last_weapon.name].hit = _ind_hit_slider[0] end TextColoredRGB("{F59B14}Only for ".._last_weapon.name)
-               else imgui.NewLine() TextColoredRGB("{F59B14}Get any weapon") end
-            else if imgui.SliderFloat("Hit##all", _hit_slider, 0.0, 100.00) then _config.hit = _hit_slider[0] end imgui.NewLine() end
-            imgui.NewLine() _toggle("Serial misses", "serialmisses")
-            if _config.serialmisses then if imgui.SliderInt("Miss after", _miss_after, 0, 100) then _config.missafter = _miss_after[0] end end
-            imgui.NewLine() _toggle("From the hip", "fromthehip") _toggle("Infinite run", "infrun")
-         elseif _menu_tab == "Control" then
-            _toggle("Enabled at start", "onatstart") _toggle("Lock activation", "lockactive") imgui.NewLine()
-            TextColoredRGB("{F59B14}Combo: segure a 1a tecla e aperte a 2a") imgui.Separator()
-            for k, v in pairs({ menubutton = "Menu (tecla 1)", combobutton = "Combo (tecla 2)", statebutton = "State (tecla 1)", lockbutton = "Lock" }) do
-               imgui.Text(v) imgui.SameLine() imgui.Indent(130)
-               if _binding and _binding.key == k then imgui.Button("???##bind_"..k, imgui.ImVec2(100, 20))
-               else
-                  local key = vkeys.id_to_name(_config[k]) or ""
-                  if imgui.Button(key.."##btn_"..k, imgui.ImVec2(100, 20)) then _binding = { key = k } end
-               end
-               imgui.Unindent(130)
-            end
-            if _binding then TextColoredRGB("{F59B14}Escolha uma tecla... (ESC = cancelar, BACKSPACE = limpar)") else imgui.TextDisabled("Clique em um botão acima para trocar a tecla") end
-         elseif _menu_tab == "ESP" then
-            _toggle("ESP Active", "esp_active") imgui.NewLine() imgui.Separator() imgui.NewLine()
-            _toggle("Box", "esp_box") imgui.SameLine() if _colorButton("box", _esp_color_box) then imgui.OpenPopup("color_box") end
-            if imgui.BeginPopup("color_box") then imgui.ColorEdit3("Box Color", _esp_color_box) imgui.EndPopup() end
-            _toggle("Names", "esp_names") imgui.SameLine() if _colorButton("names", _esp_color_name) then imgui.OpenPopup("color_names") end
-            if imgui.BeginPopup("color_names") then imgui.ColorEdit3("Name Color", _esp_color_name) imgui.EndPopup() end
-            _toggle("Lines", "esp_lines") imgui.SameLine() if _colorButton("lines", _esp_color_line) then imgui.OpenPopup("color_lines") end
-            if imgui.BeginPopup("color_lines") then imgui.ColorEdit3("Line Color", _esp_color_line) imgui.EndPopup() end
-            _toggle("Show Skin ID", "esp_skin_id") imgui.SameLine() if _colorButton("id", _esp_color_id) then imgui.OpenPopup("color_id") end
-            if imgui.BeginPopup("color_id") then imgui.ColorEdit3("ID Color", _esp_color_id) imgui.EndPopup() end
-            imgui.Text("Blocked Color") imgui.SameLine() if _colorButton("blocked", _esp_color_blocked) then imgui.OpenPopup("color_blocked") end
-            if imgui.BeginPopup("color_blocked") then imgui.ColorEdit3("Blocked Color", _esp_color_blocked) imgui.EndPopup() end
-            imgui.NewLine() imgui.Separator() imgui.NewLine() imgui.PushItemWidth(200)
-            if imgui.SliderInt("Global Distance", _global_dist_slider, 50, 1000) then _config.globalDistance = _global_dist_slider[0] end
-            if imgui.SliderInt("Deagle Distance", _deagle_dist_slider, 5, 200) then _config.deagleDistance = _deagle_dist_slider[0] end
-            if imgui.SliderInt("M4 Distance", _m4_dist_slider, 5, 300) then _config.m4Distance = _m4_dist_slider[0] end imgui.PopItemWidth()
-         elseif _menu_tab == "Puxar Arma" then
-            imgui.TextColored(imgui.ImVec4(0.55, 0.40, 0.90, 1.0), "PUXAR ARMA") imgui.Separator() imgui.NewLine()
-            imgui.PushItemWidth(200) if imgui.SliderFloat("Distancia maxima", _puxar_dist_slider, 5.0, 200.0) then _puxar_max_distance = _puxar_dist_slider[0] end imgui.PopItemWidth()
-            imgui.NewLine() imgui.Text("Comando do servidor:") imgui.PushItemWidth(200) imgui.InputText("##puxar_cmd", _puxar_cmd_buffer, 64) imgui.PopItemWidth()
-            local cmd_str = ffi.string(_puxar_cmd_buffer) if cmd_str:len() > 0 then _puxar_server_cmd = cmd_str end
-            imgui.NewLine() imgui.Separator()
-            if sampIsLocalPlayerSpawned() then TextColoredRGB("{F59B14}Armas num raio de "..string.format("%.0f", _puxar_max_distance).."m: {FFFFFF}"..#_puxar_list)
-            else TextColoredRGB("{FF5555}Voce nao esta spawnado") end
-            imgui.NewLine()
-            if imgui.Button("Atualizar lista##btn_atualizar", imgui.ImVec2(120, 22)) then _puxar_refreshList() end imgui.SameLine()
-            if imgui.Button("Puxar mais proxima##btn_puxar", imgui.ImVec2(150, 22)) then _puxar_main() end
-            imgui.NewLine() imgui.Text("Status: ") imgui.SameLine()
-            imgui.TextColored(imgui.ImVec4(bit.band(bit.rshift(_puxar_status_color, 16), 0xFF) / 255, bit.band(bit.rshift(_puxar_status_color, 8), 0xFF) / 255, bit.band(_puxar_status_color, 0xFF) / 255, 1.0), _puxar_status)
-            imgui.NewLine() imgui.Separator() imgui.NewLine() TextColoredRGB("{F59B14}Armas detectadas:")
-            imgui.BeginChild("weapon_list", imgui.ImVec2(0, 180), true)
-            if #_puxar_list == 0 then imgui.TextColored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), "Nenhuma arma por perto...")
-            else
-               for i, entry in ipairs(_puxar_list) do
-                  imgui.Text(string.format("%s", entry.name)) imgui.SameLine(140) imgui.TextColored(imgui.ImVec4(0.6, 0.6, 0.6, 1.0), string.format("%.1fm", entry.distance)) imgui.SameLine(200)
-                  if not _puxar_busy then if imgui.Button("Pegar##pegar_"..i) then _puxar_executeFromList(entry) end else imgui.TextDisabled("...") end
-               end
-            end
-            imgui.EndChild()
-         elseif _menu_tab == "Extra" then
-            imgui.BeginChild("Misc1", imgui.ImVec2(140, 220), false)
-               _toggle("Debug", "debug")
-               if imgui.Button("Log window##btn_log", imgui.ImVec2(120, 20)) then _log_window[0] = not _log_window[0] end
-               if imgui.Button("Clear log##btn_clear", imgui.ImVec2(120, 20)) then _log_data = {} end
-               if imgui.Button("Save Config##btn_save", imgui.ImVec2(120, 20)) then _saveConfig() end
-               if imgui.Button("Load Config##btn_load", imgui.ImVec2(120, 20)) then _loadConfig() end
-            imgui.EndChild()
-            imgui.SameLine()
-            imgui.BeginChild("Misc2", imgui.ImVec2(275, 220), false) TextColoredRGB("v. "..VERSION) imgui.EndChild()
-         end
-         imgui.End()
-         imgui.PopStyleColor(3)
-      end
-      if _log_window[0] then
-         local x, y = getCursorPos() imgui.SetNextWindowPos(imgui.ImVec2(x - 150, y - 10), imgui.Cond.FirstUseEver) imgui.SetNextWindowSize(imgui.ImVec2(550, 400), imgui.Cond.FirstUseEver)
-         imgui.Begin(os.date("%d %B %Y", os.time()), _log_window, imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse)
-         for _, v in ipairs(_log_data) do TextColoredRGB(v) end
-         if #_log_data > _last_log_size then imgui.SetScrollHereY() end _last_log_size = #_log_data imgui.End()
-      end
-   end
-)
-
-function sampev.onSendPlayerSync(data)
-   if not _state[0] then return end
-   local mode = _getCamMode() if _legit and (mode == 53 or mode == 7 or mode == 55) then _sendWeaponSync(_legit.id) else _sendWeaponSync(65535) end
-   if not _legit then return end
-   local weapon = _getWeapon() if not weapon then return end
-   if weapon.id == 24 or weapon.id == 26 or weapon.id == 28 or weapon.id == 32 then return end
-   if not isButtonPressed(player, 6) then mode = 4 end
-   if not _config.syncrotation or (mode ~= 53 and mode ~= 7) or _legit.dist < _min_fake_dist[0] or _legit.dist > _max_fake_dist[0] then return end
-   local my_bone = _getBodyPart(23, PLAYER_PED) local a = getHeadingFromVector2d(_legit.bone.x - my_bone.x, _legit.bone.y - my_bone.y) * math.pi / 360.0
-   local c1, c2, c3 = math.cos(0), math.cos(a), math.cos(0) local s1, s2, s3 = math.sin(0), math.sin(a), math.sin(0)
-   data.quaternion[0] = c1 * c2 * c3 - s1 * s2 * s3 data.quaternion[3] = -(c1 * s2 * c3 - s1 * c2 * s3)
-end
-
-function _sendWeaponSync(id)
-   if _last_target == id then return end
-   local weapon = _getWeapon() if not weapon then return end
-   local bs = raknetNewBitStream() raknetBitStreamWriteInt8(bs, 204) raknetBitStreamWriteInt16(bs, id) raknetBitStreamWriteInt16(bs, 65535) raknetBitStreamWriteInt8(bs, getWeapontypeSlot(weapon.id)) raknetBitStreamWriteInt8(bs, weapon.id) raknetBitStreamWriteInt16(bs, getAmmoInCharWeapon(PLAYER_PED, weapon.id)) raknetSendBitStream(bs) raknetDeleteBitStream(bs) _last_target = id
-end
-
-function sampev.onSendAimSync(data)
-   if not _state[0] or not _legit or _legit.dist < _min_fake_dist[0] or _legit.dist > _max_fake_dist[0] then return true end
-   local my_bone = _getBodyPart(23, PLAYER_PED)
-   if _config.syncaimz then local d = _vector2d(getDistanceBetweenCoords3d(_legit.bone.x, _legit.bone.y, my_bone.z, my_bone:get()), getDistanceBetweenCoords3d(my_bone.x, my_bone.y, _legit.bone.z, my_bone:get())) local aimZ = math.atan(math.abs(d.y/d.x)) data.aimZ = _legit.bone.z > my_bone.z and -aimZ or aimZ end
-   if _config.cumbypass then data.camFront = vector3d(0.0, 0.0, -0.1) data.camPos = _legit.bone end
-end
-
-function sampev.onSendWeaponsUpdate(player_target, actor_target, weapons)
-   if _config.faketarget and _legit and _config.maxfaketargetdist > _legit.dist then _last_target = _legit.id return { _legit.id, 65535, weapons } end
-   if player_target == 65535 then _last_target = 65535 end
-end
-
-function sampev.onSendCameraTargetUpdate(object_id, vehicle_id, player_id, actor_id) if _config.faketarget and _legit then return { 65535, 65535, _legit.id, 65535 } end end
-
-function sampev.onSendBulletSync(data)
-   if not _state[0] or not _legit or data.targetType == 1 or not doesCharExist(_legit.ped) then return true end
-   local weapon = _getWeapon() if not weapon then return true end
-   if not _config.fromthehip and not isCharInAnyCar(PLAYER_PED) and _getCamMode() == 4 then if _config.debug then _addLog("Skipped from hip with "..weapon.name, false) end return true end
-   _shots = _shots + 1 local missrate = _config.indivhit and _config.guns[weapon.name].hit or _hit_slider[0]
-   if missrate < 100 then local rand = math.random(1, 100) if rand >= missrate then if _config.debug then _addLog("Skipped by random", false) end return true end end
-   if _config.serialmisses then if _shots % (_miss_after[0] + 1) == 0 then if _config.debug then _addLog("Serial miss", false) end return true end end
-   local ped_coords = vector3d(getCharCoordinates(_legit.ped)) local my_coords = vector3d(getCharCoordinates(PLAYER_PED))
-   if _legit.dist > weapon.dist or isCharDead(_legit.ped) or sampIsPlayerPaused(_legit.id) then if _config.debug then _addLog("Target invalid", false) end return true end
-   local rand = vector3d(_randomFloat(_min_spread[0], _max_spread[0]), _randomFloat(_min_spread[0], _max_spread[0]), _randomFloat(_min_spread[0], _max_spread[0]))
-   data.targetType = 1 data.targetId = _legit.id data.target = ped_coords + rand data.center = _legit.bone - ped_coords + rand
-   if _config.debug then lua_thread.create(function() local my_bone = _getBodyPart(26, PLAYER_PED) local target = vector3d(data.target.x + data.center.x, data.target.y + data.center.y, data.target.z + data.center.z) local time = os.clock() while _config.debug and os.clock() - time < 10.0 do if isPointOnScreen(my_bone.x, my_bone.y, my_bone.z, 0) and isPointOnScreen(target.x, target.y, target.z, 0) then local my_bone_2d = _vector2d(convert3DCoordsToScreen(my_bone:get())) local target_2d = _vector2d(convert3DCoordsToScreen(target:get())) renderDrawLine(my_bone_2d.x, my_bone_2d.y, target_2d.x, target_2d.y, 2, bit.bor(0xFF0000, bit.lshift(255 - (os.clock() - time) * 25.5, 24))) renderDrawPolygon(target_2d.x - 5, target_2d.y - 5, 10, 10, 20, 0, bit.bor(0x00FF00, bit.lshift(255 - (os.clock() - time) * 25.5, 24))) end wait(0) end end) end
-   for bodypart, bone in ipairs(_bones) do for _, dot in ipairs(bone.dots) do if dot == _legit.bone_num then lua_thread.create(function() local id = _legit.id wait(1) sampSendGiveDamage(id, weapon.damage, weapon.id, bodypart + 2) if _config.debug then _addLog("Sent damage to "..id, true) end end) return end end end
-end
-
-function sampev.onSetPlayerPos()
-   if _puxar_busy then pcall(freezeCharPosition, PLAYER_PED, false) pcall(setCharVisible, PLAYER_PED, true) if type(restoreCameraJumpcut) == "function" then pcall(restoreCameraJumpcut) end _puxar_busy = false _puxar_status = "Cancelado pelo servidor" _puxar_status_color = 0xFFFFAA33 end
-end
-
-function _scriptTerminateHandler(scr) if _state then _state[0] = false end _writeInfRun(false) _saveConfig() end
-
--- ============================================
--- INICIALIZAÇÃO ADAPTADA PARA LIB
--- ============================================
-local function _init()
+-- ============================================================
+--  MAIN LOOP
+-- ============================================================
+function main()
    if not isSampLoaded() or not isSampfuncsLoaded() then return end
    repeat wait(100) until isSampAvailable()
 
-   _max_fake_dist    = imgui.new.int(_config.maxfaketargetdist) _fov_slider = imgui.new.float(_config.fov) _hit_slider = imgui.new.float(_config.hit) _ind_fov_slider = imgui.new.float(0.0) _skin_buff = imgui.new.int(0)
-   _pref_bone        = imgui.new.int(_getRandomBone()) _pref_bone_upd = imgui.new.int(_config.preferboneupd) _min_fake_dist = imgui.new.int(_config.minfakeaimdist) _max_fake_dist = imgui.new.int(_config.maxfaketargetdist)
-   _min_spread       = imgui.new.float(_config.minspread) _max_spread = imgui.new.float(_config.maxspread) _ind_hit_slider = imgui.new.float(0.0) _miss_after = imgui.new.int(_config.missafter) _nick_buff = imgui.new.char[64]("")
-   _global_dist_slider = imgui.new.int(_config.globalDistance) _deagle_dist_slider = imgui.new.int(_config.deagleDistance) _m4_dist_slider = imgui.new.int(_config.m4Distance)
-   _esp_color_box     = imgui.new.float[3](1.0, 1.0, 1.0) _esp_color_blocked = imgui.new.float[3](1.0, 0.0, 0.0) _esp_color_name = imgui.new.float[3](1.0, 1.0, 1.0) _esp_color_id = imgui.new.float[3](1.0, 0.0, 1.0) _esp_color_line = imgui.new.float[3](1.0, 1.0, 1.0)
-   _puxar_dist_slider = imgui.new.float(_puxar_max_distance) _puxar_cmd_buffer = imgui.new.char[64]("")
-
-   _updateIP() _loadConfig()
-   _puxar_dist_slider[0] = _puxar_max_distance ffi.copy(_puxar_cmd_buffer, _puxar_server_cmd)
+   _updateIP()
+   _writeWallshot()
+   
+   addEventHandler("onWindowMessage", _windowMsgHandler)
    addEventHandler("onScriptTerminate", _scriptTerminateHandler)
-   _writeWallshot() _writeInfRun(false)
-
-   lua_thread.create(function() while true do wait(500) if _menu_tab == "Puxar Arma" and _window[0] then _puxar_refreshList() end end end)
 
    local last_bone_upd = os.clock()
+   local _pref_bone_idx = imgui.new.int(_getRandomBone())
+
+   if _config.initmsg then sampAddChatMessage("{FF66CC}[Silent Aim Ultimate]{FFFFFF} v3.0 Loaded. Press /sys to open.", -1) end
+
    while true do
       _legit = nil
       if not sampIsChatInputActive() and not isSampfuncsConsoleActive() and not sampIsDialogActive() then
-         local function _comboActive(btn1, btn2) if btn1 == 0 and btn2 == 0 then return false end if btn1 == 0 then return isKeyJustPressed(btn2) end if btn2 == 0 then return isKeyJustPressed(btn1) end return isKeyDown(btn1) and isKeyJustPressed(btn2) end
-         if _comboActive(_config.menubutton, _config.combobutton) then if _window[0] then _saveConfig() end _window[0] = not _window[0] end
-         if not _config.lockactive and _comboActive(_config.statebutton, _config.combobutton) then _state[0] = not _state[0] end
+         if isKeyJustPressed(_config.menubutton) then menu_anim.toggle() end
+         if not _config.lockactive and isKeyJustPressed(_config.statebutton) then _state[0] = not _state[0] end
          if _config.lockactive then _state[0] = isKeyDown(_config.lockbutton) end
       end
-      local weapon = _getWeapon()
-      if _state[0] and weapon then
-         if os.clock() - last_bone_upd >= _pref_bone_upd[0] and (isButtonPressed(player, 0) or isButtonPressed(player, 1)) then last_bone_upd = os.clock() _pref_bone[0] = _getRandomBone() end
-         local sight_2d = _getSightPos() local sight_3d = vector3d(convertScreenCoordsToWorld3D(sight_2d.x, sight_2d.y, 1)) local tdist = (_config.indivfov and _config.guns[weapon.name].fov or _config.fov) * 10
-         if _config.debug then renderDrawPolygon(sight_2d.x, sight_2d.y, tdist * 2, tdist * 2, 50, 0, 0x2000ff00) end
-         local temp_bones = {} for _, dot in ipairs(_bones[_pref_bone[0]].dots) do table.insert(temp_bones, dot) end if _last_bone and not _isTableHasValue(temp_bones, _last_bone) then table.insert(temp_bones, _last_bone) end
-         for k, bone in ipairs(_bones) do if k ~= _pref_bone[0] then for _, dot in ipairs(bone.dots) do table.insert(temp_bones, dot) end end end
-         local my_color if _config.ignoremyclist then my_color = sampGetPlayerColor(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED))) end
-         for _, ped in ipairs(getAllChars()) do
-            if ped ~= PLAYER_PED and isCharOnScreen(ped) then
-               local result, id = sampGetPlayerIdByCharHandle(ped)
-               if result then
-                  local skip = false if _config.ignoremyclist and my_color == sampGetPlayerColor(id) then skip = true end if not skip and (_config.ignorebynick and _isTableHasValue(_ignored_nicks, sampGetPlayerNickname(id)) or _config.ignorebyskin and _isTableHasValue(_ignored_skins, getCharModel(ped))) then skip = true end
-                  if not skip then
-                     for _, bone in ipairs(temp_bones) do
-                        local peds_bone = _getBodyPart(bone, ped) local bone_2d = _vector2d(convert3DCoordsToScreen(peds_bone:get())) local dist_sight = getDistanceBetweenCoords2d(bone_2d.x, bone_2d.y, sight_2d.x, sight_2d.y) local dist = getDistanceBetweenCoords3d(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone:get())
-                        if dist_sight < tdist and dist < weapon.dist and (not _legit or _legit.dist_sight > dist_sight) and not isCharDead(ped) and not sampIsPlayerPaused(id) and isLineOfSightClear(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone.x, peds_bone.y, peds_bone.z, not _config.ignoreobj, not _config.ignoreveh, false, not _config.ignoreobj, false) then
-                           _legit = { dist = dist, dist_sight = dist_sight, bone_num = bone, bone = peds_bone, ped = ped, id = id } break
+
+      if _state[0] then
+         local weapon = _getWeapon()
+         if weapon then
+            if os.clock() - last_bone_upd >= _pref_bone_upd[0] and (isButtonPressed(player, 0) or isButtonPressed(player, 1)) then
+               last_bone_upd = os.clock()
+               _pref_bone_idx[0] = _getRandomBone()
+            end
+
+            local sight_2d = _getSightPos()
+            local sight_3d = vector3d(convertScreenCoordsToWorld3D(sight_2d.x, sight_2d.y, 1))
+            local tdist = (_config.indivfov and _config.guns[weapon.name].fov or _config.fov) * 10
+
+            local temp_bones = {}
+            local sel_bone_dots = _bones[_pref_bone_idx[0]].dots
+            for _, dot in ipairs(sel_bone_dots) do table.insert(temp_bones, dot) end
+            
+            for k, bone in ipairs(_bones) do
+               if k ~= _pref_bone_idx[0] then
+                  for _, dot in ipairs(bone.dots) do table.insert(temp_bones, dot) end
+               end
+            end
+
+            for _, ped in ipairs(getAllChars()) do
+               if ped ~= PLAYER_PED and isCharOnScreen(ped) then
+                  local result, id = sampGetPlayerIdByCharHandle(ped)
+                  if result then
+                     if _config.ignorebynick and _isTableHasValue(_ignored_nicks, sampGetPlayerNickname(id)) then goto next_ped end
+                     if _config.ignorebyskin and _isTableHasValue(_ignored_skins, getCharModel(ped)) then goto next_ped end
+                     if _config.ignoremyclist and sampGetPlayerColor(id) == sampGetPlayerColor(select(2, sampGetPlayerIdByCharHandle(PLAYER_PED))) then goto next_ped end
+
+                     for _, bone_id in ipairs(temp_bones) do
+                        local peds_bone = _getBodyPart(bone_id, ped)
+                        local bone_2d = _vector2d(convert3DCoordsToScreen(peds_bone:get()))
+                        local dist_sight = getDistanceBetweenCoords2d(bone_2d.x, bone_2d.y, sight_2d.x, sight_2d.y) 
+                        local dist = getDistanceBetweenCoords3d(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone:get())
+                        
+                        if dist_sight < tdist and dist < weapon.dist and (not _legit or _legit.dist_sight > dist_sight) and not isCharDead(ped) and not sampIsPlayerPaused(id) then
+                           if isLineOfSightClear(sight_3d.x, sight_3d.y, sight_3d.z, peds_bone.x, peds_bone.y, peds_bone.z, not _config.ignoreobj, not _config.ignoreveh, false, not _config.ignoreobj, false) then
+                              _legit = { dist = dist, dist_sight = dist_sight, id = id, bone = peds_bone, bone_num = bone_id }
+                              break
+                           end
                         end
                      end
                   end
                end
+               ::next_ped::
+            end
+            
+            if _legit and _config.debug then
+               local tar_2d = _vector2d(convert3DCoordsToScreen(_legit.bone:get()))
+               renderDrawLine(sight_2d.x, sight_2d.y, tar_2d.x, tar_2d.y, 1, 0xFFFF00FF)
+               renderDrawBox(tar_2d.x-2, tar_2d.y-2, 5, 5, 0xFFFF00FF)
             end
          end
-         if _legit then _last_bone = _legit.bone_num if _config.debug then local tar_2d = _vector2d(convert3DCoordsToScreen(_legit.bone:get())) renderDrawLine(sight_2d.x, sight_2d.y, tar_2d.x, tar_2d.y, 1, -1) renderDrawBox(tar_2d.x, tar_2d.y, 5, 5, 0xffff0000) renderFontDrawText(font, math.floor(_legit.dist_sight), sight_2d.x + 20, sight_2d.y - 15, 0xFFFF0000) end end
       end
-      drawESP()
       wait(0)
    end
 end
 
--- Roda a inicialização em thread para não travar o lib_manager
-lua_thread.create(_init)eral=True)
-            return
-        # Em um servidor a resposta é efêmera; em DM ela já fica visível apenas ao destinatário.
-        await interaction.response.send_message(self.code, ephemeral=interaction.guild is not None)
-
-
-def audit_embed(title: str, description: str, color: discord.Color) -> discord.Embed:
-    return discord.Embed(title=title, description=description, color=color)
-
-
-class VideoModal(discord.ui.Modal, title="Configurar vídeo"):
-    video = discord.ui.TextInput(label="Link ou ID do vídeo do YouTube", placeholder="https://www.youtube.com/watch?v=...", max_length=200)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            video_id = extract_video_id(self.video.value)
-        except ValueError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            details = await asyncio.to_thread(validate_video, video_id)
-        except RuntimeError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        update_settings(
-            interaction.guild.id,
-            video_id=details["video_id"],
-            video_title=details["title"],
-            video_channel_id=details.get("channel_id"),
-        )
-        audit(interaction.guild.id, interaction.user.id, "VIDEO_CONFIGURED", video_id)
-        panel_note = ""
-        try:
-            if get_settings(interaction.guild.id).get("player_channel_id"):
-                await publish_player_panel(interaction.guild)
-                panel_note = "\nO embed dos jogadores também foi atualizado."
-        except discord.HTTPException:
-            panel_note = "\nA configuração foi salva, mas não consegui atualizar o painel público. Use Publicar/atualizar painel."
-        await interaction.followup.send(embed=audit_embed("Vídeo configurado", f"**{discord.utils.escape_markdown(details['title'])}**\n{youtube_video_url(video_id)}{panel_note}", discord.Color.green()), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class RoleModal(discord.ui.Modal, title="Configurar cargo de recompensa"):
-    role_id = discord.ui.TextInput(label="ID do cargo de recompensa", placeholder="Ative o modo desenvolvedor e copie o ID do cargo", max_length=25)
-    role_name = discord.ui.TextInput(label="Novo nome (opcional)", placeholder="Deixe em branco para manter o nome", required=False, max_length=100)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            role = interaction.guild.get_role(int(self.role_id.value.strip()))
-        except (ValueError, TypeError):
-            role = None
-        if role is None or role.is_default() or role.managed:
-            await interaction.response.send_message("ID inválido: escolha um cargo normal deste servidor.", ephemeral=True)
-            return
-        settings = get_settings(interaction.guild.id)
-        if settings.get("join_role_id") and int(settings["join_role_id"]) == role.id:
-            await interaction.response.send_message("Esse cargo está configurado para novos membros. Escolha um cargo diferente para a recompensa de comentário.", ephemeral=True)
-            return
-        bot_member = interaction.guild.me
-        if bot_member is None or role >= bot_member.top_role:
-            await interaction.response.send_message("O cargo do bot precisa estar acima do cargo de recompensa na hierarquia.", ephemeral=True)
-            return
-        new_name = self.role_name.value.strip()
-        if new_name and new_name != role.name:
-            try:
-                await role.edit(name=new_name, reason=f"Cargo de verificação configurado por {interaction.user.id}")
-            except discord.Forbidden:
-                await interaction.response.send_message("Não consegui renomear o cargo. Confira Gerenciar cargos e a hierarquia do bot.", ephemeral=True)
-                return
-            except discord.HTTPException:
-                await interaction.response.send_message("O Discord não conseguiu renomear o cargo agora.", ephemeral=True)
-                return
-        update_settings(interaction.guild.id, reward_role_id=role.id)
-        audit(interaction.guild.id, interaction.user.id, "REWARD_ROLE_CONFIGURED", str(role.id))
-        await interaction.response.send_message(embed=audit_embed("Cargo configurado", f"O cargo {role.mention} será atribuído após a confirmação do comentário.", discord.Color.green()), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class CodeSettingsModal(discord.ui.Modal, title="Configurar códigos"):
-    digits = discord.ui.TextInput(label="Quantidade de dígitos (6 a 16)", default="8", max_length=2)
-    ttl = discord.ui.TextInput(label="Validade em minutos (1 a 1440)", default="15", max_length=4)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            digits = int(self.digits.value)
-            ttl = int(self.ttl.value)
-        except ValueError:
-            await interaction.response.send_message("Informe números inteiros para dígitos e validade.", ephemeral=True)
-            return
-        if not MIN_CODE_DIGITS <= digits <= MAX_CODE_DIGITS or not 1 <= ttl <= MAX_TTL_MINUTES:
-            await interaction.response.send_message("Use de 6 a 16 dígitos e validade entre 1 e 1440 minutos.", ephemeral=True)
-            return
-        update_settings(interaction.guild.id, code_digits=digits, code_ttl_minutes=ttl)
-        audit(interaction.guild.id, interaction.user.id, "CODE_SETTINGS_UPDATED", f"digits={digits};ttl={ttl}")
-        await interaction.response.send_message(embed=audit_embed("Códigos atualizados", f"Novos códigos terão **{digits} dígitos** e validade de **{ttl} minutos**.", discord.Color.green()), ephemeral=True)
-
-
-class ApiKeyModal(discord.ui.Modal, title="Configurar chave YouTube API"):
-    api_key = discord.ui.TextInput(label="Chave da YouTube Data API", placeholder="A chave não será repetida na resposta", min_length=10, max_length=200)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        key = self.api_key.value.strip()
-        if len(key) < 10:
-            await interaction.response.send_message("A chave informada parece inválida.", ephemeral=True)
-            return
-        data = read_secrets()
-        data["youtube_api_key"] = key
-        try:
-            save_secrets(data)
-        except RuntimeError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            # Testa a chave sem imprimir nem registrar seu conteúdo.
-            await asyncio.to_thread(youtube_request, "videos", {"part": "snippet", "id": "dQw4w9WgXcQ"}, key)
-        except RuntimeError as exc:
-            await interaction.followup.send(f"Chave salva, mas o teste falhou: {exc}", ephemeral=True)
-            return
-        audit(interaction.guild.id, interaction.user.id, "YOUTUBE_API_KEY_UPDATED")
-        await interaction.followup.send("Chave salva e teste básico da API concluído. O valor não foi exibido.", ephemeral=True)
-
-
-class PlayerChannelModal(discord.ui.Modal, title="Canal do painel dos jogadores"):
-    channel_id = discord.ui.TextInput(label="ID do canal de texto", placeholder="Cole o ID numérico do canal", max_length=25)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            channel = interaction.guild.get_channel(int(self.channel_id.value.strip()))
-        except (ValueError, TypeError):
-            channel = None
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message("Não encontrei um canal de texto com esse ID neste servidor.", ephemeral=True)
-            return
-        update_settings(interaction.guild.id, player_channel_id=channel.id, player_message_id=None)
-        audit(interaction.guild.id, interaction.user.id, "PLAYER_CHANNEL_CONFIGURED", str(channel.id))
-        await interaction.response.send_message(f"Canal do painel definido para {channel.mention}. Use **Publicar/atualizar painel** para publicar o embed.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class NotificationChannelModal(discord.ui.Modal, title="Canal de notificações"):
-    channel_id = discord.ui.TextInput(label="ID do canal de texto", placeholder="Cole o ID do canal de avisos", max_length=25)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            channel = interaction.guild.get_channel(int(self.channel_id.value.strip()))
-        except (ValueError, TypeError):
-            channel = None
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message("Não encontrei um canal de texto com esse ID neste servidor.", ephemeral=True)
-            return
-        update_settings(interaction.guild.id, notification_channel_id=channel.id)
-        audit(interaction.guild.id, interaction.user.id, "NOTIFICATION_CHANNEL_CONFIGURED", str(channel.id))
-        await interaction.response.send_message(f"Canal de notificações definido para {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class MemberEventChannelModal(discord.ui.Modal):
-    channel_id = discord.ui.TextInput(label="ID do canal de texto", placeholder="Cole o ID do canal do evento", max_length=25)
-
-    def __init__(self, event: str):
-        self.event = event if event in {"join", "leave"} else "join"
-        title = "Canal de entradas" if self.event == "join" else "Canal de saídas"
-        super().__init__(title=title)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            channel = interaction.guild.get_channel(int(self.channel_id.value.strip()))
-        except (ValueError, TypeError):
-            channel = None
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message("Não encontrei um canal de texto com esse ID neste servidor.", ephemeral=True)
-            return
-        field = "join_channel_id" if self.event == "join" else "leave_channel_id"
-        label = "entrada" if self.event == "join" else "saída"
-        update_settings(interaction.guild.id, **{field: channel.id})
-        audit(interaction.guild.id, interaction.user.id, f"{self.event.upper()}_CHANNEL_CONFIGURED", str(channel.id))
-        await interaction.response.send_message(f"Canal de {label} definido para {channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class JoinRoleModal(discord.ui.Modal, title="Cargo opcional ao entrar"):
-    role_id = discord.ui.TextInput(label="ID do cargo para novos membros", placeholder="Deve ser diferente do cargo liberado pelo comentário", max_length=25)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar essa configuração.", ephemeral=True)
-            return
-        try:
-            role = interaction.guild.get_role(int(self.role_id.value.strip()))
-        except (ValueError, TypeError):
-            role = None
-        if role is None or role.is_default() or role.managed:
-            await interaction.response.send_message("ID inválido: escolha um cargo normal deste servidor.", ephemeral=True)
-            return
-        settings = get_settings(interaction.guild.id)
-        if settings.get("reward_role_id") and int(settings["reward_role_id"]) == role.id:
-            await interaction.response.send_message("Escolha um cargo diferente do cargo de recompensa por comentário. Assim ninguém recebe a recompensa antes da verificação.", ephemeral=True)
-            return
-        bot_member = interaction.guild.me
-        if bot_member is None or role >= bot_member.top_role:
-            await interaction.response.send_message("O cargo do bot precisa estar acima do cargo automático na hierarquia.", ephemeral=True)
-            return
-        update_settings(interaction.guild.id, join_role_id=role.id)
-        audit(interaction.guild.id, interaction.user.id, "JOIN_ROLE_CONFIGURED", str(role.id))
-        enabled = bool(get_settings(interaction.guild.id).get("auto_role_on_join"))
-        status = "A atribuição automática está ligada." if enabled else "Use o botão do painel para ligar a atribuição automática."
-        await interaction.response.send_message(f"Cargo de entrada definido para {role.mention}. {status}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class BlacklistAddModal(discord.ui.Modal, title="Bloquear membro"):
-    user_id = discord.ui.TextInput(label="ID do membro", placeholder="Ative o modo desenvolvedor e copie o ID", min_length=15, max_length=22)
-    reason = discord.ui.TextInput(label="Motivo (opcional)", placeholder="Nota visível apenas para a staff", required=False, max_length=300, style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar a blacklist.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            member = await resolve_guild_member(interaction.guild, self.user_id.value)
-        except RuntimeError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if member is None or member.bot:
-            await interaction.followup.send("Não encontrei uma conta de membro válida neste servidor.", ephemeral=True)
-            return
-        reason = self.reason.value.strip()[:300]
-        now = now_iso()
-        with db_connect() as conn:
-            conn.execute(
-                """INSERT INTO blacklisted_users(guild_id,user_id,added_by,reason,created_at,last_notice_at)
-                VALUES(?,?,?,?,?,NULL)
-                ON CONFLICT(guild_id,user_id) DO UPDATE SET added_by=excluded.added_by,reason=excluded.reason,created_at=excluded.created_at,last_notice_at=NULL""",
-                (interaction.guild.id, member.id, interaction.user.id, reason, now),
-            )
-            conn.execute("DELETE FROM test_accounts WHERE guild_id=? AND user_id=?", (interaction.guild.id, member.id))
-            conn.execute(
-                "UPDATE comment_codes SET used_at=?,comment_id=NULL,author_channel_id=NULL WHERE guild_id=? AND user_id=? AND used_at IS NULL",
-                (now, interaction.guild.id, member.id),
-            )
-        audit(interaction.guild.id, interaction.user.id, "USER_BLACKLISTED", f"user={member.id};reason={reason}")
-        await refresh_saved_staff_panel(interaction.guild)
-        await interaction.followup.send(
-            embed=audit_embed("Membro bloqueado", f"{member.mention} não poderá usar os botões do bot neste servidor. O cargo atual não foi removido.\n\n**Motivo:** {discord.utils.escape_markdown(reason or 'Não informado')}", discord.Color.red()),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class BlacklistRemoveModal(discord.ui.Modal, title="Remover da blacklist"):
-    user_id = discord.ui.TextInput(label="ID do membro", min_length=15, max_length=22)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode alterar a blacklist.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        raw_id = self.user_id.value.strip()
-        if not re.fullmatch(r"[0-9]{15,22}", raw_id):
-            await interaction.followup.send("Informe um ID numérico válido.", ephemeral=True)
-            return
-        target_id = int(raw_id)
-        with db_connect() as conn:
-            cursor = conn.execute("DELETE FROM blacklisted_users WHERE guild_id=? AND user_id=?", (interaction.guild.id, target_id))
-        if not cursor.rowcount:
-            await interaction.followup.send("Essa conta não está na blacklist deste servidor.", ephemeral=True)
-            return
-        audit(interaction.guild.id, interaction.user.id, "USER_REMOVED_FROM_BLACKLIST", str(target_id))
-        await refresh_saved_staff_panel(interaction.guild)
-        await interaction.followup.send(f"A conta `{target_id}` pode voltar a usar o bot. Códigos invalidados durante o bloqueio precisam ser gerados novamente.", ephemeral=True)
-
-
-class TestAccountAddModal(discord.ui.Modal, title="Adicionar conta de teste"):
-    user_id = discord.ui.TextInput(label="ID do membro", placeholder="Pode ser seu próprio ID", min_length=15, max_length=22)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode gerenciar contas de teste.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            member = await resolve_guild_member(interaction.guild, self.user_id.value)
-        except RuntimeError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if member is None or member.bot:
-            await interaction.followup.send("Não encontrei uma conta de membro válida neste servidor.", ephemeral=True)
-            return
-        if get_blacklist_entry(interaction.guild.id, member.id):
-            await interaction.followup.send("Essa conta está na blacklist. Remova o bloqueio primeiro.", ephemeral=True)
-            return
-        with db_connect() as conn:
-            conn.execute(
-                "INSERT INTO test_accounts(guild_id,user_id,added_by,created_at) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET added_by=excluded.added_by,created_at=excluded.created_at",
-                (interaction.guild.id, member.id, interaction.user.id, now_iso()),
-            )
-        audit(interaction.guild.id, interaction.user.id, "TEST_ACCOUNT_ADDED", str(member.id))
-        await refresh_saved_staff_panel(interaction.guild)
-        await interaction.followup.send(
-            embed=audit_embed("Conta de teste adicionada", f"{member.mention} pode gerar novos códigos e repetir verificações. Cada teste ainda precisa encontrar o código exato em um comentário público; os testes ficam fora do histórico normal e não enviam o aviso público de verificação.", discord.Color.blurple()),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class TestAccountRemoveModal(discord.ui.Modal, title="Remover conta de teste"):
-    user_id = discord.ui.TextInput(label="ID do membro", min_length=15, max_length=22)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode gerenciar contas de teste.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        raw_id = self.user_id.value.strip()
-        if not re.fullmatch(r"[0-9]{15,22}", raw_id):
-            await interaction.followup.send("Informe um ID numérico válido.", ephemeral=True)
-            return
-        target_id = int(raw_id)
-        with db_connect() as conn:
-            cursor = conn.execute("DELETE FROM test_accounts WHERE guild_id=? AND user_id=?", (interaction.guild.id, target_id))
-        if not cursor.rowcount:
-            await interaction.followup.send("Essa conta não está na lista de teste.", ephemeral=True)
-            return
-        audit(interaction.guild.id, interaction.user.id, "TEST_ACCOUNT_REMOVED", str(target_id))
-        await refresh_saved_staff_panel(interaction.guild)
-        await interaction.followup.send(f"A conta `{target_id}` foi removida da lista de teste. A partir de agora, vale o limite normal de uma verificação.", ephemeral=True)
-
-
-class VerifiedMemberModal(discord.ui.Modal):
-    user_id = discord.ui.TextInput(label="ID do membro do Discord", placeholder="Cole o ID da pessoa que deseja consultar", min_length=15, max_length=22)
-    reason = discord.ui.TextInput(label="Motivo (opcional)", placeholder="Fica registrado apenas para a staff", required=False, max_length=250)
-
-    def __init__(self, action: str):
-        self.action = action if action in {"lookup", "grant", "revoke"} else "lookup"
-        titles = {"lookup": "Consultar verificação", "grant": "Adicionar verificado", "revoke": "Remover verificado"}
-        super().__init__(title=titles[self.action])
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Somente a staff pode consultar ou alterar verificações.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            member = await resolve_guild_member(interaction.guild, self.user_id.value)
-        except RuntimeError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if member is None or member.bot:
-            await interaction.followup.send("Não encontrei uma conta de pessoa válida neste servidor.", ephemeral=True)
-            return
-
-        settings = get_settings(interaction.guild.id)
-        reward_role = interaction.guild.get_role(int(settings["reward_role_id"])) if settings.get("reward_role_id") else None
-        if self.action != "lookup":
-            if reward_role is None or reward_role.managed:
-                await interaction.followup.send("O cargo de verificação não está configurado ou não pode ser gerenciado.", ephemeral=True)
-                return
-            if self.action == "grant" and get_blacklist_entry(interaction.guild.id, member.id):
-                await interaction.followup.send("A conta está na blacklist. Remova o bloqueio antes de conceder o cargo de verificação.", ephemeral=True)
-                return
-            bot_member = interaction.guild.me
-            if bot_member is None or not bot_member.guild_permissions.manage_roles or reward_role >= bot_member.top_role:
-                await interaction.followup.send("Não consigo gerenciar esse cargo. Confira **Gerenciar cargos** e a hierarquia do bot.", ephemeral=True)
-                return
-            reason = self.reason.value.strip()[:250]
-            try:
-                if self.action == "grant" and reward_role not in member.roles:
-                    await member.add_roles(reward_role, reason=f"Concedido manualmente por staff {interaction.user.id}")
-                elif self.action == "revoke" and reward_role in member.roles:
-                    await member.remove_roles(reward_role, reason=f"Revogado manualmente por staff {interaction.user.id}")
-            except discord.Forbidden:
-                await interaction.followup.send("O Discord recusou a mudança do cargo. Confira as permissões e a hierarquia.", ephemeral=True)
-                return
-            except discord.HTTPException:
-                await interaction.followup.send("O Discord não conseguiu atualizar o cargo agora. Tente novamente.", ephemeral=True)
-                return
-            action_value = "grant" if self.action == "grant" else "revoke"
-            event_name = "MANUAL_VERIFICATION_GRANTED" if self.action == "grant" else "MANUAL_VERIFICATION_REVOKED"
-            with db_connect() as conn:
-                conn.execute(
-                    "INSERT INTO manual_verification_actions(guild_id,user_id,actor_id,action,reason,created_at) VALUES(?,?,?,?,?,?)",
-                    (interaction.guild.id, member.id, interaction.user.id, action_value, reason, now_iso()),
-                )
-                if self.action == "revoke":
-                    conn.execute(
-                        "DELETE FROM verifications WHERE guild_id=? AND user_id=?",
-                        (interaction.guild.id, member.id),
-                    )
-                    conn.execute(
-                        "DELETE FROM comment_codes WHERE guild_id=? AND user_id=?",
-                        (interaction.guild.id, member.id),
-                    )
-            audit(interaction.guild.id, interaction.user.id, event_name, f"user={member.id};reason={reason}")
-
-        youtube_record, manual_record = get_verification_status(interaction.guild.id, member.id)
-        has_reward_role = bool(reward_role and reward_role in member.roles)
-        embed = discord.Embed(title="Status de verificação", color=discord.Color.blurple())
-        embed.add_field(name="Membro", value=f"{member.mention}\n`{member.id}`", inline=False)
-        embed.add_field(name="Cargo verificado", value="Sim" if has_reward_role else "Não", inline=True)
-        if youtube_record:
-            youtube_value = f"Comentário validado pelo bot em <t:{int(datetime.fromisoformat(youtube_record['verified_at']).replace(tzinfo=timezone.utc).timestamp())}:f>\nVídeo: `{youtube_record['video_id']}`"
-        else:
-            youtube_value = "Nenhum registro de comentário confirmado pelo bot."
-        if youtube_record:
-            channel_name = discord.utils.escape_markdown(youtube_record.get("author_display_name") or "Nome público indisponível")
-            channel_id = youtube_record.get("author_channel_id")
-            if channel_id:
-                channel_value = f"[{channel_name}](https://www.youtube.com/channel/{channel_id})\nID do canal: `{channel_id}`"
-            else:
-                channel_value = channel_name
-            embed.add_field(name="Canal que comentou", value=channel_value, inline=False)
-        embed.add_field(name="Registro ativo do YouTube", value=youtube_value, inline=False)
-        if manual_record:
-            action_label = "Cargo concedido manualmente" if manual_record["action"] == "grant" else "Cargo removido manualmente"
-            manual_value = f"{action_label} <t:{int(datetime.fromisoformat(manual_record['created_at']).replace(tzinfo=timezone.utc).timestamp())}:R> por <@{manual_record['actor_id']}>"
-            if manual_record.get("reason"):
-                manual_value += f"\n**Motivo:** {discord.utils.escape_markdown(manual_record['reason'])}"
-        else:
-            manual_value = "Sem ações manuais registradas."
-        embed.add_field(name="Última ação da staff", value=manual_value, inline=False)
-        if self.action == "grant":
-            embed.description = "Cargo aplicado pela staff. Isso não cria nem altera uma comprovação de comentário do YouTube."
-        elif self.action == "revoke":
-            embed.description = "Cargo retirado e registro ativo de verificação/códigos removidos. A pessoa só poderá verificar novamente depois deste reset da staff; o arquivo histórico e a auditoria permanecem preservados."
-        await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class PlayerPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return not await deny_if_blacklisted(interaction, "Painel de verificação")
-
-    @discord.ui.button(label="Gerar código", style=discord.ButtonStyle.primary, custom_id="engagement:generate", emoji="🔑")
-    async def generate(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await generate_code(interaction)
-
-    @discord.ui.button(label="Etapa 1: comentário", style=discord.ButtonStyle.success, custom_id="engagement:verify_comment", emoji="🔎")
-    async def verify_comment(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await verify_comment_step(interaction)
-
-    @discord.ui.button(label="Etapa 2: inscrição", style=discord.ButtonStyle.primary, custom_id="engagement:verify_subscriber", emoji="📺")
-    async def verify_subscription(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await verify_subscription_step(interaction)
-
-    @discord.ui.button(label="Ajuda", style=discord.ButtonStyle.secondary, custom_id="engagement:help", emoji="❔")
-    async def help(self, interaction: discord.Interaction, button: discord.ui.Button):
-        s = get_settings(interaction.guild.id) if interaction.guild else {}
-        video_id = s.get("video_id")
-        desc = "Gere seu código, publique-o no vídeo e use primeiro Etapa 1: comentário. Quando o painel confirmar o canal que comentou, use Etapa 2: inscrição. Se o YouTube ainda não listar seu comentário, aguarde e repita a etapa 1 com o mesmo código."
-        if video_id:
-            desc += f"\n\n[ Abrir o vídeo ]({youtube_video_url(video_id)})"
-        await interaction.response.send_message(embed=audit_embed("Como verificar", desc, discord.Color.blurple()), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-class StaffPanelTabSelect(discord.ui.Select):
-    PAGES = [
-        ("config", "Configuração"),
-        ("painel", "Painéis e avisos"),
-        ("membros", "Membros e verificações"),
-        ("moderacao", "Moderação e testes"),
-    ]
-
-    def __init__(self, current_page: str):
-        options = [
-            discord.SelectOption(label=label, value=value, default=value == current_page)
-            for value, label in self.PAGES
-        ]
-        super().__init__(
-            placeholder="Ir para seção…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id=f"engagement:staff_tab:{current_page}",
-            row=4,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        page = self.values[0]
-        await interaction.response.edit_message(
-            embed=make_staff_embed(interaction.guild, page),
-            view=StaffPanelView(page),
-        )
-
-
-class StaffPanelView(discord.ui.View):
-    PAGE_BUTTONS = {
-        "config": {
-            "engagement:staff_video", "engagement:staff_role", "engagement:staff_code",
-            "engagement:staff_api", "engagement:staff_youtube_oauth", "engagement:staff_youtube_subscribers",
-            "engagement:staff_refresh",
-        },
-        "painel": {
-            "engagement:staff_channel", "engagement:staff_notifications_channel", "engagement:staff_publish",
-            "engagement:staff_join_channel", "engagement:staff_leave_channel", "engagement:staff_notify_join_toggle",
-            "engagement:staff_notify_leave_toggle", "engagement:staff_notify_verify_toggle",
-        },
-        "membros": {
-            "engagement:staff_verified_grant", "engagement:staff_verified_revoke", "engagement:staff_verified_lookup",
-            "engagement:staff_join_role", "engagement:staff_join_role_toggle",
-        },
-        "moderacao": {
-            "engagement:staff_blacklist_add", "engagement:staff_blacklist_remove",
-            "engagement:staff_test_add", "engagement:staff_test_remove",
-        },
-    }
-
-    def __init__(self, page: str = "config"):
-        super().__init__(timeout=None)
-        self.page = page if page in self.PAGE_BUTTONS else "config"
-        controls = [child for child in self.children if getattr(child, "custom_id", None) in self.PAGE_BUTTONS[self.page]]
-        self.clear_items()
-        for index, child in enumerate(controls):
-            child.row = index // 5
-            self.add_item(child)
-        self.add_item(StaffPanelTabSelect(self.page))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if await deny_if_blacklisted(interaction, "Painel da staff"):
-            return False
-        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-            await interaction.response.send_message("Este painel é exclusivo para Administrador/Gerenciar servidor.", ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="Configurar vídeo", style=discord.ButtonStyle.primary, custom_id="engagement:staff_video", row=0)
-    async def video(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VideoModal())
-
-    @discord.ui.button(label="Configurar cargo", style=discord.ButtonStyle.primary, custom_id="engagement:staff_role", row=0)
-    async def role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RoleModal())
-
-    @discord.ui.button(label="Código/validade", style=discord.ButtonStyle.primary, custom_id="engagement:staff_code", row=0)
-    async def code(self, interaction: discord.Interaction, button: discord.ui.Button):
-        s = get_settings(interaction.guild.id)
-        modal = CodeSettingsModal()
-        modal.digits.default = str(s["code_digits"])
-        modal.ttl.default = str(s["code_ttl_minutes"])
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Adicionar verificado", style=discord.ButtonStyle.success, custom_id="engagement:staff_verified_grant", row=0)
-    async def grant_verified(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VerifiedMemberModal("grant"))
-
-    @discord.ui.button(label="Remover verificado", style=discord.ButtonStyle.danger, custom_id="engagement:staff_verified_revoke", row=0)
-    async def revoke_verified(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VerifiedMemberModal("revoke"))
-
-    @discord.ui.button(label="Chave YouTube API", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_api", row=1)
-    async def api(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ApiKeyModal())
-
-    @discord.ui.button(label="Canal do painel", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_channel", row=1)
-    async def player_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PlayerChannelModal())
-
-    @discord.ui.button(label="Canal de notificações", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_notifications_channel", row=1)
-    async def notification_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(NotificationChannelModal())
-
-    @discord.ui.button(label="Publicar/atualizar painel", style=discord.ButtonStyle.success, custom_id="engagement:staff_publish", row=1)
-    async def publish(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            message = await publish_player_panel(interaction.guild)
-        except (RuntimeError, discord.HTTPException) as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        await interaction.followup.send(f"Painel dos jogadores publicado/atualizado em {message.channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-    @discord.ui.button(label="Atualizar status", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_refresh", row=1)
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=make_staff_embed(interaction.guild, self.page), view=self)
-
-    @discord.ui.button(label="Cargo ao entrar", style=discord.ButtonStyle.primary, custom_id="engagement:staff_join_role", row=2)
-    async def join_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(JoinRoleModal())
-
-    @discord.ui.button(label="Alternar cargo ao entrar", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_join_role_toggle", row=2)
-    async def toggle_join_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_settings(interaction.guild.id)
-        join_role_id = settings.get("join_role_id")
-        reward_role_id = settings.get("reward_role_id")
-        if not join_role_id:
-            await interaction.response.send_message("Configure primeiro o cargo opcional ao entrar.", ephemeral=True)
-            return
-        if reward_role_id and int(join_role_id) == int(reward_role_id):
-            await interaction.response.send_message("O cargo de entrada não pode ser o mesmo cargo liberado pelo comentário.", ephemeral=True)
-            return
-        enabled = not bool(settings.get("auto_role_on_join"))
-        update_settings(interaction.guild.id, auto_role_on_join=int(enabled))
-        audit(interaction.guild.id, interaction.user.id, "AUTO_ROLE_ON_JOIN_TOGGLED", str(enabled))
-        await interaction.response.edit_message(embed=make_staff_embed(interaction.guild, self.page), view=self)
-        await interaction.followup.send(f"Atribuição automática ao entrar: **{'ligada' if enabled else 'desligada'}**.", ephemeral=True)
-
-    @discord.ui.button(label="Avisos de entrada", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_notify_join_toggle", row=2)
-    async def toggle_join_notice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_settings(interaction.guild.id)
-        if not settings.get("join_channel_id"):
-            await interaction.response.send_message("Configure primeiro o canal de entradas.", ephemeral=True)
-            return
-        enabled = not bool(settings.get("notify_on_join"))
-        update_settings(interaction.guild.id, notify_on_join=int(enabled))
-        audit(interaction.guild.id, interaction.user.id, "NOTIFY_ON_JOIN_TOGGLED", str(enabled))
-        await interaction.response.edit_message(embed=make_staff_embed(interaction.guild, self.page), view=self)
-        await interaction.followup.send(f"Avisos de entrada: **{'ligados' if enabled else 'desligados'}**.", ephemeral=True)
-
-    @discord.ui.button(label="Avisos de verificação", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_notify_verify_toggle", row=2)
-    async def toggle_verify_notice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_settings(interaction.guild.id)
-        if not settings.get("notification_channel_id"):
-            await interaction.response.send_message("Configure primeiro o canal de notificações.", ephemeral=True)
-            return
-        enabled = not bool(settings.get("notify_on_verify"))
-        update_settings(interaction.guild.id, notify_on_verify=int(enabled))
-        audit(interaction.guild.id, interaction.user.id, "NOTIFY_ON_VERIFY_TOGGLED", str(enabled))
-        await interaction.response.edit_message(embed=make_staff_embed(interaction.guild, self.page), view=self)
-        await interaction.followup.send(f"Avisos de verificação: **{'ligados' if enabled else 'desligados'}**.", ephemeral=True)
-
-    @discord.ui.button(label="Consultar verificação", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_verified_lookup", row=2)
-    async def lookup_verified(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VerifiedMemberModal("lookup"))
-
-    @discord.ui.button(label="Bloquear membro", style=discord.ButtonStyle.danger, custom_id="engagement:staff_blacklist_add", row=3)
-    async def blacklist_add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BlacklistAddModal())
-
-    @discord.ui.button(label="Desbloquear membro", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_blacklist_remove", row=3)
-    async def blacklist_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BlacklistRemoveModal())
-
-    @discord.ui.button(label="Adicionar conta de teste", style=discord.ButtonStyle.primary, custom_id="engagement:staff_test_add", row=3)
-    async def test_add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TestAccountAddModal())
-
-    @discord.ui.button(label="Remover conta de teste", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_test_remove", row=3)
-    async def test_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TestAccountRemoveModal())
-
-    @discord.ui.button(label="Canal de entradas", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_join_channel", row=4)
-    async def join_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(MemberEventChannelModal("join"))
-
-    @discord.ui.button(label="Canal de saídas", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_leave_channel", row=4)
-    async def leave_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(MemberEventChannelModal("leave"))
-
-    @discord.ui.button(label="Avisos de saída", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_notify_leave_toggle", row=4)
-    async def toggle_leave_notice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = get_settings(interaction.guild.id)
-        if not settings.get("leave_channel_id"):
-            await interaction.response.send_message("Configure primeiro o canal de saídas.", ephemeral=True)
-            return
-        enabled = not bool(settings.get("notify_on_leave"))
-        update_settings(interaction.guild.id, notify_on_leave=int(enabled))
-        audit(interaction.guild.id, interaction.user.id, "NOTIFY_ON_LEAVE_TOGGLED", str(enabled))
-        await interaction.response.edit_message(embed=make_staff_embed(interaction.guild, self.page), view=self)
-        await interaction.followup.send(f"Avisos de saída: **{'ligados' if enabled else 'desligados'}**.", ephemeral=True)
-
-    @discord.ui.button(label="Conectar canal OAuth", style=discord.ButtonStyle.primary, custom_id="engagement:staff_youtube_oauth", row=4)
-    async def youtube_oauth(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            authorization_url = start_youtube_oauth()
-        except RuntimeError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        view = discord.ui.View(timeout=600)
-        view.add_item(discord.ui.Button(label="Autorizar conta Google", style=discord.ButtonStyle.link, url=authorization_url))
-        embed = discord.Embed(
-            title="Conectar canal do YouTube",
-            description=(
-                "Abra o Google, entre na conta que administra o canal dono do vídeo e autorize somente a leitura do YouTube. "
-                "Após aceitar, o navegador deverá voltar para esta conexão local e confirmar o canal. "
-                "Depois toque em **Atualizar status** no painel.\n\n"
-                "Se o Google mostrar que o app está em teste, use um Gmail adicionado como usuário de teste no projeto OAuth."
-            ),
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    @discord.ui.button(label="Contar inscritos visíveis", style=discord.ButtonStyle.secondary, custom_id="engagement:staff_youtube_subscribers", row=4)
-    async def count_youtube_subscribers(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            owner_channel_id = await asyncio.to_thread(get_video_owner_channel_id, interaction.guild.id)
-            subscriber_ids, pages, truncated = await asyncio.to_thread(fetch_visible_subscriber_ids, owner_channel_id)
-        except RuntimeError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        status = "O limite de 1.000 resultados foi alcançado; a API pode ter mais inscritos." if truncated else "A API não indicou mais páginas disponíveis."
-        await interaction.followup.send(
-            f"O YouTube retornou **{len(subscriber_ids)} canais de inscritos visíveis** em **{pages} página(s)**.\n{status}\n"
-            "Inscrições privadas ou não retornadas pelo YouTube não aparecem nesta contagem.",
-            ephemeral=True,
-        )
-
-
-async def publish_player_panel(guild: discord.Guild) -> discord.Message:
-    s = get_settings(guild.id)
-    if not s.get("player_channel_id"):
-        raise RuntimeError("Configure primeiro o canal do painel dos jogadores.")
-    channel = guild.get_channel(int(s["player_channel_id"]))
-    if not isinstance(channel, discord.TextChannel):
-        raise RuntimeError("O canal configurado não existe mais; configure outro canal.")
-    message = None
-    if s.get("player_message_id"):
-        try:
-            message = await channel.fetch_message(int(s["player_message_id"]))
-        except (discord.NotFound, ValueError, TypeError):
-            message = None
-    if message:
-        await message.edit(embed=make_player_embed(guild.id), view=PlayerPanelView(), allowed_mentions=discord.AllowedMentions.none())
-    else:
-        message = await channel.send(embed=make_player_embed(guild.id), view=PlayerPanelView(), allowed_mentions=discord.AllowedMentions.none())
-        update_settings(guild.id, player_message_id=message.id)
-    return message
-
-
-async def publish_staff_panel(guild: discord.Guild, channel: discord.TextChannel) -> discord.Message:
-    settings = get_settings(guild.id)
-    message = None
-    if settings.get("staff_panel_message_id") and settings.get("staff_channel_id") == channel.id:
-        try:
-            message = await channel.fetch_message(int(settings["staff_panel_message_id"]))
-        except (discord.NotFound, ValueError, TypeError):
-            message = None
-    if message:
-        await message.edit(embed=make_staff_embed(guild), view=StaffPanelView(), allowed_mentions=discord.AllowedMentions.none())
-    else:
-        message = await channel.send(embed=make_staff_embed(guild), view=StaffPanelView(), allowed_mentions=discord.AllowedMentions.none())
-    update_settings(guild.id, staff_channel_id=channel.id, staff_panel_message_id=message.id)
-    return message
-
-
-async def refresh_saved_staff_panel(guild: discord.Guild) -> None:
-    settings = get_settings(guild.id)
-    if not settings.get("staff_channel_id") or not settings.get("staff_panel_message_id"):
-        return
-    channel = guild.get_channel(int(settings["staff_channel_id"]))
-    if not isinstance(channel, discord.TextChannel):
-        return
-    try:
-        message = await channel.fetch_message(int(settings["staff_panel_message_id"]))
-        await message.edit(embed=make_staff_embed(guild), view=StaffPanelView(), allowed_mentions=discord.AllowedMentions.none())
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError, TypeError):
-        pass
-
-
-async def send_member_notification(guild: discord.Guild, member: discord.Member, event: str, role: discord.Role | None = None, youtube_author: dict | None = None) -> None:
-    settings = get_settings(guild.id)
-    if event == "join":
-        channel_id = settings.get("join_channel_id") or settings.get("notification_channel_id")
-    elif event == "leave":
-        channel_id = settings.get("leave_channel_id")
-    else:
-        channel_id = settings.get("notification_channel_id")
-    if not channel_id:
-        return
-    channel = guild.get_channel(int(channel_id))
-    if not isinstance(channel, discord.TextChannel):
-        try:
-            channel = await guild.fetch_channel(int(channel_id))
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            return
-    if not isinstance(channel, discord.TextChannel):
-        return
-
-    if event == "join":
-        embed = discord.Embed(
-            title="Novo membro chegou",
-            description=f"{discord.utils.escape_markdown(member.display_name)} entrou no servidor.",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="Cargo automático", value=role.mention if role else "Nenhum cargo automático foi atribuído.", inline=False)
-        embed.set_footer(text="Aviso enviado no canal de entradas")
-    elif event == "leave":
-        embed = discord.Embed(
-            title="Membro saiu do servidor",
-            description=f"{discord.utils.escape_markdown(member.display_name)} saiu do servidor.",
-            color=discord.Color.dark_grey(),
-        )
-        embed.add_field(name="Nome de usuário", value=discord.utils.escape_markdown(member.name), inline=True)
-        embed.set_footer(text="Aviso enviado no canal de saídas")
-    else:
-        embed = discord.Embed(
-            title="Verificação concluída",
-            description=f"{discord.utils.escape_markdown(member.display_name)} confirmou o comentário e a inscrição visível, vinculou o canal do YouTube e recebeu {role.mention if role else 'o cargo configurado'}.",
-            color=discord.Color.green(),
-        )
-        if youtube_author:
-            author_name = discord.utils.escape_markdown(youtube_author.get("author_display_name") or "Nome público indisponível")
-            author_channel_id = youtube_author.get("author_channel_id")
-            channel_value = f"[{author_name}](https://www.youtube.com/channel/{author_channel_id})\nID: `{author_channel_id}`" if author_channel_id else author_name
-            embed.add_field(name="Canal vinculado (comentário + inscrição)", value=channel_value, inline=False)
-        embed.set_footer(text="Aviso de verificação configurado pela staff")
-    try:
-        embed.set_thumbnail(url=member.display_avatar.url)
-        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-    except discord.HTTPException:
-        logger.warning("Não consegui enviar o aviso de evento no servidor %s.", guild.id)
-
-
-async def ensure_member_role(guild: discord.Guild) -> discord.Role | None:
-    me = guild.me
-    if me is None or not me.guild_permissions.manage_roles:
-        return None
-    settings = get_settings(guild.id)
-    reward_role_id = int(settings["reward_role_id"]) if settings.get("reward_role_id") else None
-    member_role = guild.get_role(int(settings["join_role_id"])) if settings.get("join_role_id") else None
-    if member_role and member_role.id != reward_role_id and not member_role.managed and member_role < me.top_role:
-        return member_role
-
-    # Reuse a safe, existing member role where possible; never reuse the verification reward role.
-    has_reward_named_member = any(r.id == reward_role_id and r.name.casefold() == "membro" for r in guild.roles)
-    candidate_names = ("Membro inicial", "Membro") if has_reward_named_member else ("Membro", "Membro inicial")
-    member_role = next(
-        (r for name in candidate_names for r in guild.roles if r.name.casefold() == name.casefold() and r.id != reward_role_id and not r.managed and r < me.top_role),
-        None,
-    )
-    if member_role is None:
-        preferred_name = candidate_names[0]
-        member_role = await guild.create_role(
-            name=preferred_name,
-            mentionable=False,
-            reason="Cargo comum de novos membros criado pelo bot",
-        )
-    update_settings(guild.id, join_role_id=member_role.id, auto_role_on_join=1)
-    return member_role
-
-
-async def ensure_setup_resources(guild: discord.Guild, category_name: str, role_name: str) -> dict:
-    me = guild.me
-    if me is None or not me.guild_permissions.manage_channels or not me.guild_permissions.manage_roles:
-        raise RuntimeError("O bot precisa das permissões **Gerenciar canais** e **Gerenciar cargos** para executar /criar.")
-
-    settings = get_settings(guild.id)
-    category = guild.get_channel(int(settings["category_id"])) if settings.get("category_id") else None
-    if not isinstance(category, discord.CategoryChannel):
-        category = await guild.create_category(
-            category_name[:100],
-            reason=f"Estrutura de verificação criada por {guild.me.id}",
-        )
-        update_settings(guild.id, category_id=category.id)
-    elif category.name != category_name[:100]:
-        await category.edit(name=category_name[:100], reason="Nome atualizado pelo comando /criar")
-
-    reward_role = guild.get_role(int(settings["reward_role_id"])) if settings.get("reward_role_id") else None
-    if reward_role is None:
-        reward_role = discord.utils.get(guild.roles, name=role_name[:100])
-    if reward_role is None:
-        reward_role = await guild.create_role(
-            name=role_name[:100],
-            mentionable=False,
-            reason="Cargo de recompensa criado pelo comando /criar",
-        )
-    if reward_role.managed or reward_role >= me.top_role:
-        raise RuntimeError("O cargo de recompensa está acima do cargo do bot ou é gerenciado. Mova o cargo do bot para cima e tente novamente.")
-    update_settings(guild.id, reward_role_id=reward_role.id)
-    member_role = await ensure_member_role(guild)
-    if member_role is None:
-        raise RuntimeError("Não consegui criar ou preparar o cargo dos novos membros. Confira Gerenciar cargos e a hierarquia do bot.")
-
-    read_only = discord.PermissionOverwrite(
-        view_channel=True,
-        read_message_history=True,
-        send_messages=False,
-        add_reactions=False,
-    )
-    bot_permissions = discord.PermissionOverwrite(
-        view_channel=True,
-        read_message_history=True,
-        send_messages=True,
-        embed_links=True,
-        manage_messages=True,
-    )
-    overwrites = {guild.default_role: read_only, me: bot_permissions}
-
-    player_channel = guild.get_channel(int(settings["player_channel_id"])) if settings.get("player_channel_id") else None
-    player_was_recreated = not isinstance(player_channel, discord.TextChannel) or player_channel.category_id != category.id
-    if player_was_recreated:
-        player_channel = await guild.create_text_channel(
-            "verificar-comentario",
-            category=category,
-            overwrites=overwrites,
-            topic="Gere seu código, comente no vídeo configurado e use o botão para verificar.",
-            reason="Canal do painel de verificação criado por /criar",
-        )
-
-    notice_channel = guild.get_channel(int(settings["notification_channel_id"])) if settings.get("notification_channel_id") else None
-    if not isinstance(notice_channel, discord.TextChannel) or notice_channel.category_id != category.id:
-        notice_channel = await guild.create_text_channel(
-            "notificacoes",
-            category=category,
-            overwrites=overwrites,
-            topic="Avisos de verificações concluídas, conforme a configuração da staff.",
-            reason="Canal de notificações criado por /criar",
-        )
-
-    join_channel = guild.get_channel(int(settings["join_channel_id"])) if settings.get("join_channel_id") else None
-    join_channel_was_created = not isinstance(join_channel, discord.TextChannel) or join_channel.category_id != category.id
-    if join_channel_was_created:
-        join_channel = await guild.create_text_channel(
-            "entradas",
-            category=category,
-            overwrites=overwrites,
-            topic="Avisos de novos membros e atribuição do cargo inicial.",
-            reason="Canal de entrada de membros criado por /criar",
-        )
-
-    leave_channel = guild.get_channel(int(settings["leave_channel_id"])) if settings.get("leave_channel_id") else None
-    leave_channel_was_created = not isinstance(leave_channel, discord.TextChannel) or leave_channel.category_id != category.id
-    if leave_channel_was_created:
-        leave_channel = await guild.create_text_channel(
-            "saidas",
-            category=category,
-            overwrites=overwrites,
-            topic="Avisos quando membros deixam o servidor.",
-            reason="Canal de saída de membros criado por /criar",
-        )
-
-    updates = {
-        "category_id": category.id,
-        "player_channel_id": player_channel.id,
-        "notification_channel_id": notice_channel.id,
-        "join_channel_id": join_channel.id,
-        "leave_channel_id": leave_channel.id,
-    }
-    if join_channel_was_created:
-        updates["notify_on_join"] = 1
-    if leave_channel_was_created:
-        updates["notify_on_leave"] = 1
-    if player_was_recreated:
-        updates["player_message_id"] = None
-    update_settings(guild.id, **updates)
-    return {
-        "category": category,
-        "player": player_channel,
-        "notifications": notice_channel,
-        "entries": join_channel,
-        "exits": leave_channel,
-        "role": reward_role,
-        "member_role": member_role,
-    }
-
-
-async def generate_code(interaction: discord.Interaction) -> None:
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        await interaction.response.send_message("Use o painel dentro do servidor.", ephemeral=True)
-        return
-    s = get_settings(interaction.guild.id)
-    if not s.get("video_id"):
-        await interaction.response.send_message("A staff ainda não configurou o vídeo.", ephemeral=True)
-        return
-    if not s.get("reward_role_id"):
-        await interaction.response.send_message("A staff ainda não configurou o cargo de recompensa.", ephemeral=True)
-        return
-    if not get_youtube_api_key():
-        await interaction.response.send_message("A verificação ainda não está disponível; a chave da API não foi configurada.", ephemeral=True)
-        return
-    test_mode = is_test_account(interaction.guild.id, interaction.user.id)
-    reward = interaction.guild.get_role(int(s["reward_role_id"]))
-    if reward and reward in interaction.user.roles and not test_mode:
-        await interaction.response.send_message("Você já tem o cargo de verificação.", ephemeral=True)
-        return
-    if not test_mode:
-        with db_connect() as conn:
-            already_verified = conn.execute(
-                "SELECT 1 FROM verifications WHERE guild_id=? AND user_id=?",
-                (interaction.guild.id, interaction.user.id),
-            ).fetchone()
-        if already_verified:
-            await interaction.response.send_message(
-                "Sua verificação continua registrada neste servidor, mesmo que o cargo tenha sido removido. Se a staff autorizou uma nova tentativa, peça para usar **Remover verificado** primeiro.",
-                ephemeral=True,
-            )
-            return
-
-    now = utc_now()
-    code = None
-    expires = now + timedelta(minutes=int(s["code_ttl_minutes"]))
-    with db_connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        old = conn.execute("SELECT code,video_id,expires_at,used_at FROM comment_codes WHERE guild_id=? AND user_id=?", (interaction.guild.id, interaction.user.id)).fetchone()
-        if old and old["used_at"] and not test_mode:
-            await interaction.response.send_message(
-                "Esse código já foi utilizado. Se a staff autorizou uma nova tentativa, peça para usar **Remover verificado** no painel staff.",
-                ephemeral=True,
-            )
-            return
-        if old and not old["used_at"] and old["video_id"] == s["video_id"]:
-            try:
-                old_expiry = datetime.fromisoformat(old["expires_at"])
-                if old_expiry.tzinfo is None:
-                    old_expiry = old_expiry.replace(tzinfo=timezone.utc)
-                if old_expiry > now:
-                    code = old["code"]
-                    expires = old_expiry
-            except ValueError:
-                pass
-        if code is None:
-            for _ in range(10):
-                digits = "".join(str(secrets.randbelow(10)) for _ in range(int(s["code_digits"])))
-                candidate = f"VERIF-{digits}"
-                collision = conn.execute("SELECT 1 FROM comment_codes WHERE guild_id=? AND code=?", (interaction.guild.id, candidate)).fetchone()
-                if not collision:
-                    code = candidate
-                    break
-            if code is None:
-                await interaction.response.send_message("Não consegui gerar um código único agora. Tente novamente.", ephemeral=True)
-                return
-            conn.execute(
-                """INSERT INTO comment_codes(guild_id,user_id,code,video_id,created_at,expires_at,used_at,comment_id,author_channel_id,last_attempt_at,subscriber_checked_at)
-                VALUES(?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL)
-                ON CONFLICT(guild_id,user_id) DO UPDATE SET code=excluded.code,video_id=excluded.video_id,created_at=excluded.created_at,expires_at=excluded.expires_at,used_at=NULL,comment_id=NULL,author_channel_id=NULL,author_display_name=NULL,last_attempt_at=NULL,subscriber_checked_at=NULL""",
-                (interaction.guild.id, interaction.user.id, code, s["video_id"], now.isoformat(), expires.isoformat()),
-            )
-        else:
-            conn.execute("UPDATE comment_codes SET last_attempt_at=NULL WHERE guild_id=? AND user_id=?", (interaction.guild.id, interaction.user.id))
-
-    embed = make_code_embed(code, s["video_id"], expires)
-    remaining = max(1, (expires - utc_now()).total_seconds())
-    view = CodeDeliveryView(code, s["video_id"], interaction.user.id, remaining)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-    try:
-        await interaction.user.send(embed=embed, view=CodeDeliveryView(code, s["video_id"], interaction.user.id, remaining), allowed_mentions=discord.AllowedMentions.none())
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-
-def _player_verification_context(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        raise RuntimeError("Use esta verificação dentro do servidor.")
-    guild_id, user_id = interaction.guild.id, interaction.user.id
-    settings = get_settings(guild_id)
-    if not settings.get("video_id") or not settings.get("reward_role_id"):
-        raise RuntimeError("A staff ainda não terminou de configurar a verificação.")
-    test_mode = is_test_account(guild_id, user_id)
-    role = interaction.guild.get_role(int(settings["reward_role_id"]))
-    if role is None:
-        raise RuntimeError("O cargo configurado não existe mais. Avise a staff.")
-    if role in interaction.user.roles and not test_mode:
-        raise RuntimeError("Você já tem o cargo de verificação.")
-    with db_connect() as conn:
-        if not test_mode and conn.execute(
-            "SELECT 1 FROM verifications WHERE guild_id=? AND user_id=?", (guild_id, user_id)
-        ).fetchone():
-            raise RuntimeError("Sua verificação já está registrada. Se perdeu o cargo ou precisa refazer, fale com a staff para usar **Remover verificado**.")
-        row = conn.execute("SELECT * FROM comment_codes WHERE guild_id=? AND user_id=?", (guild_id, user_id)).fetchone()
-    if row is None:
-        raise RuntimeError("Toque primeiro em **Gerar código**.")
-    if row["used_at"]:
-        raise RuntimeError("Esse código já foi consumido. Gere um código novo ou fale com a staff se já concluiu a verificação.")
-    try:
-        expires = datetime.fromisoformat(row["expires_at"])
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-    except ValueError:
-        raise RuntimeError("O código está inválido. Gere outro pelo painel.") from None
-    if expires <= utc_now():
-        raise RuntimeError("O código expirou. Gere outro pelo painel e publique o novo comentário.")
-    return settings, test_mode, role, dict(row)
-
-
-async def verify_comment_step(interaction: discord.Interaction) -> None:
-    try:
-        settings, test_mode, _, row = _player_verification_context(interaction)
-    except RuntimeError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    if not get_youtube_api_key():
-        await interaction.response.send_message("A staff ainda não configurou a chave da YouTube Data API.", ephemeral=True)
-        return
-    if row.get("comment_id") and row.get("author_channel_id"):
-        name = discord.utils.escape_markdown(row.get("author_display_name") or "Canal do YouTube")
-        await interaction.response.send_message(
-            f"**Etapa 1/2 já concluída.** O comentário foi encontrado no canal **{name}**. Agora toque em **Etapa 2: inscrição**.",
-            ephemeral=True,
-        )
-        return
-    last_attempt = row.get("last_attempt_at")
-    if last_attempt:
-        try:
-            elapsed = (utc_now() - datetime.fromisoformat(last_attempt)).total_seconds()
-            if elapsed < VERIFY_COOLDOWN_SECONDS:
-                await interaction.response.send_message(f"Aguarde {int(VERIFY_COOLDOWN_SECONDS - elapsed)} segundos antes de verificar o comentário novamente.", ephemeral=True)
-                return
-        except ValueError:
-            pass
-    with db_connect() as conn:
-        conn.execute(
-            "UPDATE comment_codes SET last_attempt_at=? WHERE guild_id=? AND user_id=? AND used_at IS NULL",
-            (now_iso(), interaction.guild.id, interaction.user.id),
-        )
-    code, video_id = row["code"], row["video_id"]
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        found = await asyncio.to_thread(find_public_comment, video_id, code)
-    except RuntimeError as exc:
-        await interaction.followup.send(str(exc), ephemeral=True)
-        return
-    if not found:
-        await interaction.followup.send("Ainda não encontrei seu comentário público. Confirme o código e o vídeo, aguarde a publicação pelo YouTube e tente novamente com o mesmo código.", ephemeral=True)
-        return
-    if not found.get("author_channel_id"):
-        await interaction.followup.send("O YouTube encontrou o comentário, mas não retornou um ID de canal que permita vincular a Etapa 2. Nenhum código foi consumido; tente novamente mais tarde ou fale com a staff.", ephemeral=True)
-        return
-    now = utc_now()
-    try:
-        with db_connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            current = conn.execute("SELECT * FROM comment_codes WHERE guild_id=? AND user_id=?", (interaction.guild.id, interaction.user.id)).fetchone()
-            current_expiry = datetime.fromisoformat(current["expires_at"]) if current else now
-            if current_expiry.tzinfo is None:
-                current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-            if not current or current["used_at"] or current["code"] != code or current["video_id"] != video_id or current_expiry <= now:
-                raise RuntimeError("O código expirou ou mudou enquanto eu procurava o comentário. Gere outro pelo painel.")
-            if not test_mode:
-                linked = conn.execute(
-                    "SELECT user_id FROM verification_history WHERE guild_id=? AND author_channel_id=? AND user_id!=? LIMIT 1",
-                    (interaction.guild.id, found["author_channel_id"], interaction.user.id),
-                ).fetchone()
-                if linked:
-                    raise RuntimeError("Esse canal do YouTube já foi vinculado a outra conta Discord neste servidor.")
-            conn.execute(
-                "UPDATE comment_codes SET comment_id=?,author_channel_id=?,author_display_name=?,subscriber_checked_at=NULL WHERE guild_id=? AND user_id=? AND used_at IS NULL",
-                (found["comment_id"], found["author_channel_id"], found.get("author_display_name"), interaction.guild.id, interaction.user.id),
-            )
-    except sqlite3.IntegrityError:
-        await interaction.followup.send("Não consegui registrar esse comentário porque ele já está associado a outra verificação.", ephemeral=True)
-        return
-    except RuntimeError as exc:
-        await interaction.followup.send(str(exc), ephemeral=True)
-        return
-    author_name = discord.utils.escape_markdown(found.get("author_display_name") or "Nome público indisponível")
-    author_value = f"[{author_name}](https://www.youtube.com/channel/{found['author_channel_id']}) · ID `{found['author_channel_id']}`"
-    await interaction.followup.send(
-        f"**Etapa 1/2 concluída:** encontrei o comentário. Canal identificado: {author_value}.\nAgora toque em **Etapa 2: inscrição** para conferir se esse canal aparece entre os inscritos visíveis do canal dono do vídeo.",
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-
-
-async def verify_subscription_step(interaction: discord.Interaction) -> None:
-    try:
-        settings, test_mode, role, row = _player_verification_context(interaction)
-    except RuntimeError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    author_channel_id = row.get("author_channel_id")
-    comment_id = row.get("comment_id")
-    if not comment_id or not author_channel_id:
-        await interaction.response.send_message("Conclua primeiro **Etapa 1: comentário**. Ainda não tenho um canal associado ao seu código.", ephemeral=True)
-        return
-    last_checked = row.get("subscriber_checked_at")
-    if last_checked:
-        try:
-            elapsed = (utc_now() - datetime.fromisoformat(last_checked)).total_seconds()
-            if elapsed < VERIFY_COOLDOWN_SECONDS:
-                await interaction.response.send_message(f"Aguarde {int(VERIFY_COOLDOWN_SECONDS - elapsed)} segundos antes de consultar a lista novamente.", ephemeral=True)
-                return
-        except ValueError:
-            pass
-    with db_connect() as conn:
-        conn.execute(
-            "UPDATE comment_codes SET subscriber_checked_at=? WHERE guild_id=? AND user_id=? AND used_at IS NULL",
-            (now_iso(), interaction.guild.id, interaction.user.id),
-        )
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        live_comment = await asyncio.to_thread(
-            find_public_comment_by_id, row["video_id"], comment_id, row["code"]
-        )
-        if not live_comment or live_comment.get("comment_id") != comment_id or live_comment.get("author_channel_id") != author_channel_id:
-            with db_connect() as conn:
-                conn.execute(
-                    "UPDATE comment_codes SET comment_id=NULL,author_channel_id=NULL,author_display_name=NULL WHERE guild_id=? AND user_id=? AND code=? AND used_at IS NULL",
-                    (interaction.guild.id, interaction.user.id, row["code"]),
-                )
-            await interaction.followup.send(
-                "Não consegui confirmar que o comentário original ainda está público e inalterado. O código não foi consumido nem o cargo liberado. Publique-o novamente se necessário e refaça **Etapa 1: comentário**.",
-                ephemeral=True,
-            )
-            return
-        owner_channel_id = await asyncio.to_thread(get_video_owner_channel_id, interaction.guild.id)
-        subscriber_ids, pages, truncated = await asyncio.to_thread(fetch_visible_subscriber_ids, owner_channel_id)
-    except RuntimeError as exc:
-        await interaction.followup.send(str(exc), ephemeral=True)
-        return
-    if author_channel_id not in subscriber_ids:
-        tail = "A lista chegou ao limite de 1.000 resultados." if truncated else "O YouTube não retornou esse canal na lista visível."
-        await interaction.followup.send(
-            f"**Etapa 1/2 concluída:** o comentário veio do canal `{author_channel_id}`. **Não consegui confirmar a inscrição** ({tail}).\n"
-            "Inscrições privadas não aparecem para o bot. Seu código continua ativo e não foi consumido; se já está inscrito, confira se a inscrição está pública e tente a Etapa 2 novamente depois.",
-            ephemeral=True,
-        )
-        return
-
-    now = utc_now()
-    claimed = False
-    found = {"comment_id": comment_id, "author_channel_id": author_channel_id, "author_display_name": row.get("author_display_name")}
-    try:
-        with db_connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            current = conn.execute("SELECT * FROM comment_codes WHERE guild_id=? AND user_id=?", (interaction.guild.id, interaction.user.id)).fetchone()
-            current_expiry = datetime.fromisoformat(current["expires_at"]) if current else now
-            if current_expiry.tzinfo is None:
-                current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-            if (
-                not current or current["used_at"] or current["code"] != row["code"] or current["video_id"] != settings["video_id"]
-                or current["comment_id"] != comment_id or current["author_channel_id"] != author_channel_id or current_expiry <= now
-            ):
-                raise RuntimeError("O código expirou ou mudou durante a consulta. Gere outro pelo painel e repita as duas etapas.")
-            if not test_mode:
-                linked_elsewhere = conn.execute(
-                    "SELECT 1 FROM verification_history WHERE guild_id=? AND author_channel_id=? AND user_id!=? LIMIT 1",
-                    (interaction.guild.id, author_channel_id, interaction.user.id),
-                ).fetchone()
-                if linked_elsewhere:
-                    raise sqlite3.IntegrityError("YouTube channel already linked to another Discord account")
-            changed = conn.execute(
-                "UPDATE comment_codes SET used_at=? WHERE guild_id=? AND user_id=? AND used_at IS NULL",
-                (now.isoformat(), interaction.guild.id, interaction.user.id),
-            ).rowcount
-            if not changed:
-                raise RuntimeError("Esse código já foi consumido por outra tentativa. Gere outro ou fale com a staff.")
-            if test_mode:
-                conn.execute(
-                    "INSERT INTO test_verifications(guild_id,user_id,video_id,comment_id,author_channel_id,author_display_name,verified_at) VALUES(?,?,?,?,?,?,?)",
-                    (interaction.guild.id, interaction.user.id, settings["video_id"], comment_id, author_channel_id, row.get("author_display_name"), now.isoformat()),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO verification_history(guild_id,user_id,video_id,comment_id,author_channel_id,author_display_name,verified_at) VALUES(?,?,?,?,?,?,?)",
-                    (interaction.guild.id, interaction.user.id, settings["video_id"], comment_id, author_channel_id, row.get("author_display_name"), now.isoformat()),
-                )
-                conn.execute(
-                    """INSERT INTO verifications(guild_id,user_id,video_id,comment_id,author_channel_id,author_display_name,verified_at)
-                    VALUES(?,?,?,?,?,?,?)
-                    ON CONFLICT(guild_id,user_id) DO UPDATE SET video_id=excluded.video_id,comment_id=excluded.comment_id,
-                    author_channel_id=excluded.author_channel_id,author_display_name=excluded.author_display_name,verified_at=excluded.verified_at""",
-                    (interaction.guild.id, interaction.user.id, settings["video_id"], comment_id, author_channel_id, row.get("author_display_name"), now.isoformat()),
-                )
-            claimed = True
-    except sqlite3.IntegrityError:
-        await interaction.followup.send("Esse canal ou comentário já está vinculado a outra conta Discord neste servidor.", ephemeral=True)
-        return
-    except RuntimeError as exc:
-        await interaction.followup.send(str(exc), ephemeral=True)
-        return
-
-    try:
-        await interaction.user.add_roles(role, reason="Comentário confirmado e canal encontrado entre os inscritos visíveis do proprietário do vídeo")
-    except (discord.Forbidden, discord.HTTPException):
-        if claimed:
-            with db_connect() as conn:
-                conn.execute("UPDATE comment_codes SET used_at=NULL WHERE guild_id=? AND user_id=? AND comment_id=?", (interaction.guild.id, interaction.user.id, comment_id))
-                if test_mode:
-                    conn.execute("DELETE FROM test_verifications WHERE guild_id=? AND user_id=? AND comment_id=?", (interaction.guild.id, interaction.user.id, comment_id))
-                else:
-                    conn.execute("DELETE FROM verifications WHERE guild_id=? AND user_id=? AND comment_id=?", (interaction.guild.id, interaction.user.id, comment_id))
-                    conn.execute("DELETE FROM verification_history WHERE guild_id=? AND user_id=? AND comment_id=?", (interaction.guild.id, interaction.user.id, comment_id))
-        await interaction.followup.send("As duas etapas passaram, mas não consegui atribuir o cargo. Avise a staff para conferir permissões/hierarquia; seu comentário continua registrado e você pode tentar a Etapa 2 novamente.", ephemeral=True)
-        return
-
-    audit(interaction.guild.id, interaction.user.id, "TEST_COMMENT_AND_SUBSCRIPTION_VERIFIED" if test_mode else "COMMENT_AND_SUBSCRIPTION_VERIFIED", comment_id)
-    if settings.get("notify_on_verify") and not test_mode:
-        await send_member_notification(interaction.guild, interaction.user, "verify", role, found)
-    prefix = "**Verificação de teste concluída!**" if test_mode else "**Verificação concluída!**"
-    author_name = discord.utils.escape_markdown(row.get("author_display_name") or "Nome público indisponível")
-    author_value = f"[{author_name}](https://www.youtube.com/channel/{author_channel_id}) · ID `{author_channel_id}`"
-    await interaction.followup.send(
-        f"{prefix} As duas etapas passaram, você recebeu/confirmou {role.mention} e seu canal foi vinculado a esta conta Discord.\nCanal vinculado: {author_value}.",
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-    try:
-        title = "Verificação de teste concluída" if test_mode else "Verificação concluída"
-        await interaction.user.send(
-            embed=audit_embed(
-                title,
-                f"As duas etapas passaram e você recebeu/confirmou o cargo **{discord.utils.escape_markdown(role.name)}** no servidor **{discord.utils.escape_markdown(interaction.guild.name)}**.\n\nCanal vinculado: **{author_name}** (`{author_channel_id}`).",
-                discord.Color.green(),
-            ),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-
-class BlacklistAwareCommandTree(app_commands.CommandTree):
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return not await deny_if_blacklisted(interaction, "Comando slash")
-
-
-_intents = discord.Intents.none()
-_intents.guilds = True
-_intents.members = True
-bot = commands.Bot(command_prefix="!", intents=_intents, tree_cls=BlacklistAwareCommandTree, help_command=None)
-
-
-@bot.tree.command(name="criar", description="Cria a estrutura inicial da verificação por comentário.")
-@app_commands.default_permissions(manage_guild=True)
-@app_commands.describe(
-    nome_categoria="Nome inicial da categoria criada (padrão: VERIFICAÇÃO)",
-    nome_cargo="Nome inicial do cargo liberado após comentar (padrão: Verificado)",
+-- ============================================================
+--  INTERFACE MIMGUI (ULTIMATE)
+-- ============================================================
+imgui.OnInitialize(function()
+    imgui.GetIO().IniFilename = nil
+    imgui.CustomTheme()
+end)
+
+imgui.OnFrame(
+    function() return menu_anim.alpha > 0.00 end,
+    function(self)
+        local resX, resY = getScreenResolution()
+        self.HideCursor = not menu_anim.state
+        imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, menu_anim.alpha)
+        imgui.SetNextWindowPos(imgui.ImVec2(resX / 2, resY / 2), imgui.Cond.FirstUseEver, imgui.ImVec2(0.5, 0.5))
+        imgui.SetNextWindowSize(imgui.ImVec2(580, 400), imgui.Cond.FirstUseEver)
+
+        if imgui.Begin('##SilentAimUltimate', nil, imgui.WindowFlags.NoDecoration) then
+            -- Sidebar
+            imgui.BeginChild('Sidebar', imgui.ImVec2(140, 370), true)
+                imgui.TextColored(imgui.ImVec4(1, 0.4, 0.8, 1), "   ULTIMATE")
+                imgui.Separator()
+                imgui.Spacing()
+                imgui.MenuItem2(1, "Main", _menu_tab)
+                imgui.MenuItem2(2, "Config", _menu_tab)
+                imgui.MenuItem2(3, "Control", _menu_tab)
+                imgui.MenuItem2(4, "Extra", _menu_tab)
+                
+                imgui.SetCursorPosY(335)
+                imgui.ToggleButton("ACTIVE", _state)
+            imgui.EndChild()
+
+            imgui.SameLine()
+
+            -- Content
+            imgui.BeginChild('Content', imgui.ImVec2(410, 370), true)
+                local tab = _menu_tab[0]
+                if tab == 1 then
+                    imgui.Text("TARGETING & FOV")
+                    imgui.Separator()
+                    local obj = imgui.new.bool(_config.ignoreobj)
+                    if imgui.ToggleButton("Ignore Objects", obj) then _config.ignoreobj = obj[0] end
+                    local veh = imgui.new.bool(_config.ignoreveh)
+                    if imgui.ToggleButton("Ignore Vehicles", veh) then _config.ignoreveh = veh[0] end
+                    local ft = imgui.new.bool(_config.faketarget)
+                    if imgui.ToggleButton("Fake Target", ft) then _config.faketarget = ft[0] end
+                    
+                    if _config.faketarget then
+                        imgui.PushItemWidth(200)
+                        if imgui.SliderInt("Max Dist##fake", _max_fake_dist, 0, 200) then _config.maxfaketargetdist = _max_fake_dist[0] end
+                        imgui.PopItemWidth()
+                    end
+                    
+                    imgui.Spacing()
+                    imgui.Text("FOV & HIT CHANCE")
+                    imgui.Separator()
+                    imgui.PushItemWidth(250)
+                    if imgui.SliderFloat("Global FOV", _fov_slider, 0, 80) then _config.fov = _fov_slider[0] end
+                    if imgui.SliderFloat("Hit Chance", _hit_slider, 0, 100) then _config.hit = _hit_slider[0] end
+                    imgui.PopItemWidth()
+
+                elseif tab == 2 then
+                    imgui.Text("ADVANCED COMBAT")
+                    imgui.Separator()
+                    local ws = imgui.new.bool(_config.wallshot)
+                    if imgui.ToggleButton("Wallshot", ws) then _config.wallshot = ws[0]; _writeWallshot() end
+                    local sr = imgui.new.bool(_config.syncrotation)
+                    if imgui.ToggleButton("Sync Rotation", sr) then _config.syncrotation = sr[0] end
+                    local sa = imgui.new.bool(_config.syncaimz)
+                    if imgui.ToggleButton("Sync Aim Z", sa) then _config.syncaimz = sa[0] end
+                    
+                    imgui.Spacing()
+                    imgui.PushItemWidth(200)
+                    if imgui.SliderFloat("Min Spread", _min_spread, -0.15, 0) then _config.minspread = _min_spread[0] end
+                    if imgui.SliderFloat("Max Spread", _max_spread, 0, 0.15) then _config.maxspread = _max_spread[0] end
+                    imgui.PopItemWidth()
+
+                elseif tab == 3 then
+                    imgui.Text("CONTROLS & BINDS")
+                    imgui.Separator()
+                    imgui.Text("Menu Key: " .. (vkeys.id_to_name(_config.menubutton) or "U"))
+                    imgui.Text("State Key: " .. (vkeys.id_to_name(_config.statebutton) or "J"))
+                    imgui.Text("Lock Key: " .. (vkeys.id_to_name(_config.lockbutton) or "X"))
+                    
+                    imgui.Spacing()
+                    local oas = imgui.new.bool(_config.onatstart)
+                    if imgui.ToggleButton("Enable at Start", oas) then _config.onatstart = oas[0] end
+                    local la = imgui.new.bool(_config.lockactive)
+                    if imgui.ToggleButton("Lock Activation", la) then _config.lockactive = la[0] end
+
+                elseif tab == 4 then
+                    imgui.Text("UTILITIES & DEBUG")
+                    imgui.Separator()
+                    local dbg = imgui.new.bool(_config.debug)
+                    if imgui.ToggleButton("Debug Mode", dbg) then _config.debug = dbg[0] end
+                    
+                    imgui.Spacing()
+                    if imgui.Button("Open Log Window", imgui.ImVec2(160, 30)) then _log_window[0] = not _log_window[0] end
+                    if imgui.Button("Clear All Logs", imgui.ImVec2(160, 30)) then _log_data = {} end
+                    
+                    imgui.Spacing()
+                    imgui.TextDisabled("Silent Aim Ultimate v3.0")
+                    imgui.TextDisabled("Developed with Modern MImGui Framework.")
+                end
+            imgui.EndChild()
+            imgui.End()
+        end
+        imgui.PopStyleVar()
+    end
 )
-async def create_setup(
-    interaction: discord.Interaction,
-    nome_categoria: str = "VERIFICAÇÃO",
-    nome_cargo: str = "Verificado",
-):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-        await interaction.response.send_message("É necessário ter Administrador ou Gerenciar servidor.", ephemeral=True)
-        return
-    if not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("Execute /criar em um canal de texto da equipe para publicar o painel staff.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        resources = await ensure_setup_resources(interaction.guild, nome_categoria.strip() or "VERIFICAÇÃO", nome_cargo.strip() or "Verificado")
-        player_panel = await publish_player_panel(interaction.guild)
-        await publish_staff_panel(interaction.guild, interaction.channel)
-    except (RuntimeError, discord.Forbidden, discord.HTTPException) as exc:
-        logger.warning("/criar não concluiu no servidor %s (%s).", interaction.guild.id, type(exc).__name__)
-        await interaction.followup.send(f"Não consegui terminar a estrutura: {exc}\nA operação pode ser repetida; canais/cargo já criados serão reaproveitados.", ephemeral=True)
-        return
-    audit(interaction.guild.id, interaction.user.id, "SETUP_CREATED_OR_UPDATED")
-    embed = discord.Embed(
-        title="Estrutura criada / atualizada",
-        description="A estrutura está pronta. Os recursos existentes foram reaproveitados; o painel staff foi publicado neste canal.",
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Categoria", value=resources["category"].name, inline=True)
-    embed.add_field(name="Cargo após comentar", value=resources["role"].mention, inline=True)
-    embed.add_field(name="Cargo comum ao entrar", value=resources["member_role"].mention, inline=True)
-    embed.add_field(name="Painel dos jogadores", value=player_panel.channel.mention, inline=False)
-    embed.add_field(name="Notificações", value=resources["notifications"].mention, inline=True)
-    embed.add_field(name="Entradas e saídas", value=f"Chegadas: {resources['entries'].mention}\nSaídas: {resources['exits'].mention}", inline=True)
-    embed.add_field(name="Próximos passos", value="No painel staff, configure o vídeo e a chave da YouTube API; depois conecte por OAuth a conta dona do canal do vídeo para validar a inscrição. O cargo comum e os avisos de entrada/saída ficam ativos por padrão e podem ser ajustados no painel.", inline=False)
-    await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
+-- ============================================================
+--  RAKNET & EVENTOS (ORIGINAL)
+-- ============================================================
+function sampev.onSendPlayerSync(data)
+   if not _state[0] then return end
+   local mode = _getCamMode()
+   if _legit and (mode == 53 or mode == 7 or mode == 55) then _sendWeaponSync(_legit.id) else _sendWeaponSync(65535) end
+   if not _legit then return end
+   local weapon = _getWeapon()
+   if not weapon or weapon.id == 24 or weapon.id == 26 or weapon.id == 28 or weapon.id == 32 then return end
+   if not isButtonPressed(player, 6) then mode = 4 end
+   if not _config.syncrotation or (mode ~= 53 and mode ~= 7) or _legit.dist < _min_fake_dist[0] or _legit.dist > _max_fake_dist[0] then return end
+   local my_bone = _getBodyPart(23, PLAYER_PED)
+   local a = getHeadingFromVector2d(_legit.bone.x - my_bone.x, _legit.bone.y - my_bone.y) * math.pi / 360.0
+   local c1, c2, c3 = math.cos(0), math.cos(a), math.cos(0)
+   local s1, s2, s3 = math.sin(0), math.sin(a), math.sin(0)
+   data.quaternion[0] = c1 * c2 * c3 - s1 * s2 * s3
+   data.quaternion[3] = -(c1 * s2 * c3 - s1 * c2 * s3)
+end
 
-@bot.tree.command(name="painel-staff", description="Publica o painel administrativo da verificação por comentário.")
-@app_commands.default_permissions(manage_guild=True)
-async def staff_panel(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-        await interaction.response.send_message("É necessário ter Administrador ou Gerenciar servidor.", ephemeral=True)
-        return
-    if not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("Execute o comando em um canal de texto privado da equipe.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        await publish_staff_panel(interaction.guild, interaction.channel)
-    except discord.HTTPException:
-        await interaction.followup.send("Não consegui publicar o painel. Confira a permissão de enviar mensagens/embeds neste canal.", ephemeral=True)
-        return
-    await interaction.followup.send("Painel staff publicado/atualizado neste canal.", ephemeral=True)
+function _sendWeaponSync(id)
+   if _last_target == id then return end
+   _last_target = id
+   local bs = raknetNewBitStream()
+   raknetBitStreamWriteInt8(bs, 203)
+   raknetBitStreamWriteInt16(bs, id)
+   raknetSendBitStreamEx(bs, 1, 7, 1)
+   raknetDeleteBitStream(bs)
+end
 
+function _windowMsgHandler(msg, key, param)
+   if _binding and msg == wm.WM_KEYDOWN then
+      if key == vkeys.VK_ESCAPE then _binding = nil
+      elseif key == vkeys.VK_BACK then _config[_binding.key] = 0; _binding = nil
+      else _config[_binding.key] = key; _binding = nil end
+   end
+end
 
-@bot.tree.command(name="atualizar-painel-staff", description="Atualiza o painel administrativo da verificação.")
-@app_commands.default_permissions(manage_guild=True)
-async def refresh_staff_panel(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-        await interaction.response.send_message("É necessário ter Administrador ou Gerenciar servidor.", ephemeral=True)
-        return
-    if not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("Execute o comando em um canal de texto privado da equipe.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        await publish_staff_panel(interaction.guild, interaction.channel)
-    except discord.HTTPException:
-        await interaction.followup.send("Não consegui atualizar o painel. Confira as permissões do bot.", ephemeral=True)
-        return
-    await interaction.followup.send("Painel staff atualizado neste canal.", ephemeral=True)
-
-
-@bot.tree.command(name="publicar-painel", description="Publica ou atualiza o painel público dos jogadores.")
-@app_commands.default_permissions(manage_guild=True)
-async def publish_panel_command(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-        await interaction.response.send_message("É necessário ter Administrador ou Gerenciar servidor.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        message = await publish_player_panel(interaction.guild)
-    except (RuntimeError, discord.HTTPException) as exc:
-        await interaction.followup.send(f"Não consegui publicar o painel: {exc}", ephemeral=True)
-        return
-    await interaction.followup.send(f"Painel publicado/atualizado em {message.channel.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-
-@bot.tree.command(name="status-verificacao", description="Mostra o estado da configuração da verificação.")
-@app_commands.default_permissions(manage_guild=True)
-async def verification_status(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
-        await interaction.response.send_message("É necessário ter Administrador ou Gerenciar servidor.", ephemeral=True)
-        return
-    await interaction.response.send_message(embed=make_staff_embed(interaction.guild), ephemeral=True)
-
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    if member.bot:
-        return
-    settings = get_settings(member.guild.id)
-    assigned_role = None
-    if settings.get("auto_role_on_join") and settings.get("join_role_id"):
-        try:
-            join_role_id = int(settings["join_role_id"])
-            reward_role_id = int(settings["reward_role_id"]) if settings.get("reward_role_id") else None
-        except (TypeError, ValueError):
-            join_role_id = reward_role_id = None
-        role = member.guild.get_role(join_role_id) if join_role_id else None
-        if role and role.id != reward_role_id and not role.managed and member.guild.me and role < member.guild.me.top_role:
-            try:
-                await member.add_roles(role, reason="Cargo comum de novos membros configurado pelo bot/staff")
-                assigned_role = role
-            except (discord.Forbidden, discord.HTTPException):
-                logger.warning("Não consegui atribuir o cargo de entrada no servidor %s.", member.guild.id)
-        elif role and role.id == reward_role_id:
-            logger.warning("Cargo automático de entrada igual ao cargo de verificação; atribuição bloqueada no servidor %s.", member.guild.id)
-
-    if settings.get("notify_on_join"):
-        await send_member_notification(member.guild, member, "join", assigned_role)
-
-
-@bot.event
-async def on_member_remove(member: discord.Member):
-    if member.bot:
-        return
-    settings = get_settings(member.guild.id)
-    if settings.get("notify_on_leave"):
-        await send_member_notification(member.guild, member, "leave")
-
-
-@bot.event
-async def on_guild_join(guild: discord.Guild):
-    try:
-        role = await ensure_member_role(guild)
-        if role:
-            logger.info("Cargo comum %s preparado no novo servidor %s.", role.id, guild.id)
-        else:
-            logger.warning("Não foi possível criar cargo comum no servidor %s: falta Gerenciar cargos.", guild.id)
-    except (discord.Forbidden, discord.HTTPException, RuntimeError):
-        logger.exception("Falha ao preparar cargo comum no novo servidor %s.", guild.id)
-
-
-@bot.event
-async def on_ready():
-    if not getattr(bot, "_persistent_views_registered", False):
-        bot.add_view(PlayerPanelView())
-        for staff_page in StaffPanelTabSelect.PAGES:
-            bot.add_view(StaffPanelView(staff_page[0]))
-        bot._persistent_views_registered = True
-    try:
-        synced = await bot.tree.sync()
-        logger.info("Comandos de aplicação sincronizados: %d", len(synced))
-    except discord.HTTPException:
-        logger.exception("Falha ao sincronizar comandos do Discord")
-    for guild in bot.guilds:
-        settings = get_settings(guild.id)
-        if not settings.get("reward_role_id"):
-            old_role = discord.utils.get(guild.roles, name="Inscrito")
-            if old_role and not old_role.managed:
-                update_settings(guild.id, reward_role_id=old_role.id)
-                audit(guild.id, None, "LEGACY_REWARD_ROLE_IMPORTED", str(old_role.id))
-                logger.info("Cargo legado de recompensa reconhecido no servidor %s.", guild.id)
-    if not getattr(bot, "_player_panels_refreshed", False):
-        for guild in bot.guilds:
-            settings = get_settings(guild.id)
-            if not settings.get("player_channel_id"):
-                continue
-            try:
-                await publish_player_panel(guild)
-            except (RuntimeError, discord.Forbidden, discord.HTTPException):
-                logger.warning("Não consegui atualizar o painel público no servidor %s ao iniciar.", guild.id)
-        bot._player_panels_refreshed = True
-    logger.info("Bot conectado como %s; banco local: %s", bot.user, DB_PATH)
-
-
-def main() -> None:
-    init_db()
-    migrate_legacy_secrets()
-    token = get_discord_token()
-    try:
-        bot.run(token, log_handler=None)
-    except discord.LoginFailure:
-        logger.error("Token inválido ou revogado. Remova discord_token de %s e execute novamente para cadastrá-lo.", SECRETS_PATH)
-    except KeyboardInterrupt:
-        logger.info("Bot encerrado pelo usuário.")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except RuntimeError as exc:
-        print(f"Erro de configuração: {exc}", file=sys.stderr)
+function _scriptTerminateHandler()
+   if _config.wallshot then _config.wallshot = false; _writeWallshot() end
+end
